@@ -1,0 +1,620 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>PaperRaven: how it works</title>
+<meta name="description" content="A walk-through of one real PaperRaven run: a topic and a few papers in, a verified, topic-bounded corpus out.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="PaperRaven: how it works">
+<meta property="og:description" content="A walk-through of one real PaperRaven run: a topic and a few papers in, a verified, topic-bounded corpus out.">
+<meta property="og:url" content="https://aaronclauset.github.io/paperraven/">
+<meta property="og:image" content="https://aaronclauset.github.io/paperraven/paperraven.png">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="paperraven.png">
+<style>
+  :root {
+    --paper: #f4ecdc; --facet-a: #ebe0c9; --facet-b: #e2d4b6; --card: #fbf6ea; --rule: #d8c9aa;
+    --ink: #3a2a1e; --ink-2: #6b5646;
+    /* Accents: the lens blue, deepened for text; the citation network's colours for how a
+       paper was found; a brick red for what is refused or excluded. */
+    --blue: #24618d; --blue-bg: #dcebf5; --sky: #8ec5e8;
+    --recall: #0072b2; --search: #009e73; --refs: #cc79a7; --seed: #e69f00;
+    --amber: #a8690a; --amber-bg: #f7e6c4; --green: #1f7a5c; --green-bg: #d6eee4;
+    --red: #a3392a; --red-bg: #f0d2c9;
+    --head: "Avenir Next", "Avenir", "Futura", "Century Gothic", "Segoe UI", system-ui, sans-serif;
+    --serif: "Iowan Old Style", "Palatino Linotype", "Palatino", "Book Antiqua", Georgia, serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--paper); color: var(--ink); overflow: hidden; }
+  body { font-family: var(--head); -webkit-font-smoothing: antialiased; }
+  body.idle { cursor: none; }
+
+  /* A fixed 1600 x 900 stage, scaled to fit the window. */
+  #stage { position: absolute; left: 50%; top: 50%; width: 1600px; height: 900px;
+           transform: translate(-50%, -50%) scale(var(--s, 1)); transform-origin: center; }
+  .slide { position: absolute; inset: 0; padding: 112px 104px 60px; opacity: 0; visibility: hidden;
+           transition: opacity .45s ease, visibility 0s linear .45s; }
+  .slide.active { opacity: 1; visibility: visible; transition: opacity .45s ease; }
+
+  /* Folded-paper facets behind the slide headers, after the raven. */
+  .facets { position: absolute; inset: 0 0 auto 0; height: 300px; pointer-events: none; }
+  .facets polygon:nth-child(odd) { fill: var(--facet-a); }
+  .facets polygon:nth-child(even) { fill: var(--facet-b); }
+
+  #head { position: absolute; left: 104px; right: 104px; top: 32px; display: flex; align-items: center;
+          gap: 16px; font-size: 21px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2);
+          transition: opacity .3s; z-index: 2; }
+  #head .mark { width: 58px; height: 38px; overflow: hidden; }
+  #head .mark img { width: 58px; height: auto; display: block; }
+  #head .brand { color: var(--ink); letter-spacing: .12em; }
+  #head .brand b { font-weight: 800; }
+  #sect { font-size: 16px; font-weight: 700; letter-spacing: .1em; padding: 4px 12px; border-radius: 3px;
+          color: #fff; background: var(--accent, var(--blue)); }
+  #folio { margin-left: auto; font-variant-numeric: tabular-nums; }
+
+  h2 { position: relative; margin: 0 0 32px; max-width: 1360px; font-size: 50px; line-height: 1.12;
+       font-weight: 600; letter-spacing: -.01em; }
+  /* A short bar in the slide's accent colour, above each claim. */
+  .slide h2::before { content: ""; display: block; width: 84px; height: 7px; border-radius: 4px;
+                      background: var(--accent, var(--blue)); margin-bottom: 16px; }
+  .hero h2::before { display: none; }
+  p, li { font-size: 27px; line-height: 1.42; }
+  .muted { color: var(--ink-2); }
+  .small { font-size: 22px; }
+  .lead { margin: -12px 0 20px; }
+  .title { font-family: var(--serif); font-style: normal; }
+  .rv { opacity: 0; transform: translateY(10px); transition: opacity .5s ease, transform .5s ease; }
+  .rv.on { opacity: 1; transform: none; }
+  .hl { color: var(--blue); font-weight: 700; }
+
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: start; }
+  .card { background: var(--card); border: 1.5px solid var(--rule); border-radius: 6px; padding: 20px 24px; }
+  .tag { display: inline-block; font-size: 17px; letter-spacing: .06em; text-transform: uppercase;
+         padding: 3px 10px; border-radius: 3px; font-weight: 700; white-space: nowrap; }
+  .tag.ok, .tag.you { background: var(--blue-bg); color: var(--blue); }
+  .tag.no { background: var(--red-bg); color: var(--red); }
+  .tag.tool, .tag.ins { background: var(--amber-bg); color: var(--amber); }
+  .tag.enf { background: var(--green-bg); color: var(--green); }
+
+  /* 1 Title and the closing slide */
+  .hero { display: grid; grid-template-columns: 1fr 470px; gap: 72px; align-items: center; height: 100%; }
+  .hero > div { min-width: 0; }
+  .hero > img { width: 470px; height: auto; }
+  .hero h2 { font-size: 56px; margin-bottom: 26px; }
+  .pitch { font-size: 30px; line-height: 1.4; max-width: 880px; margin: 0; }
+  .vs { display: grid; grid-template-columns: auto auto; gap: 12px; margin-top: 32px; justify-content: start; }
+  .vs span.us { grid-column: 1 / -1; justify-self: center; }
+  .vs span { font-size: 21px; padding: 8px 16px; border-radius: 4px; background: var(--card);
+             border: 1.5px solid var(--rule); color: var(--ink-2); }
+  .vs span.us { background: var(--blue); color: #fff; border-color: var(--blue); font-weight: 600; }
+  #hint { font-size: 20px; color: var(--ink-2); margin-top: 40px; transition: opacity .4s; }
+  .install { font-family: var(--mono); font-size: 18px; line-height: 1.6; background: var(--card);
+             border: 1.5px solid var(--rule); border-left: 6px solid var(--blue); border-radius: 6px;
+             padding: 18px 22px; white-space: pre; }
+  a { color: var(--blue); }
+
+  /* 2 The input */
+  .input { grid-template-columns: 0.85fr 1.15fr; }
+  blockquote { margin: 0; padding: 2px 0 2px 24px; border-left: 6px solid var(--seed);
+               font-family: var(--serif); font-size: 22px; line-height: 1.42; }
+  .photo { margin: 0 0 14px; }
+  .photo img { display: block; width: 100%; height: 250px; object-fit: cover; object-position: 50% 52%;
+               border-radius: 6px; }
+  .photo figcaption { font-size: 14px; color: var(--ink-2); margin-top: 6px; letter-spacing: .02em; }
+  .input .small { margin: 0 0 8px; }
+  .seeds { display: grid; gap: 8px; }
+  .seed { font-size: 18px; line-height: 1.25; padding: 8px 14px; border-left: 6px solid var(--seed); }
+  .seed .by { color: var(--ink-2); font-size: 15px; letter-spacing: .02em; }
+  .seed .title { font-size: 19px; display: block; }
+
+  /* 3 The criteria */
+  .crit { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  .crit .card { border-top: 6px solid var(--blue); }
+  .crit .card.tool { border-top-color: var(--seed); }
+  .crit .card p { margin: 10px 0 0; font-size: 24px; }
+  .crit .lab { font-size: 19px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2);
+               display: flex; gap: 12px; align-items: center; }
+
+  /* 4 Checking, 5 Judging */
+  .rows { display: grid; gap: 12px; }
+  .row { display: grid; grid-template-columns: 1fr 340px; gap: 24px; align-items: center; padding: 11px 20px;
+         border-left: 6px solid var(--blue); }
+  .row .title { font-size: 22px; line-height: 1.3; }
+  .row .yr { color: var(--ink-2); font-family: var(--head); font-size: 19px; margin-left: 8px; }
+  .row .why { grid-column: 1 / -1; font-size: 20px; line-height: 1.4; color: var(--ink-2); margin-top: -4px; }
+  .row.refused, .row.out { border-left-color: var(--red); }
+  .row.refused { background: #fbefe9; }
+  .row .res { justify-self: end; text-align: right; white-space: nowrap; }
+  .row .res .venue { font-size: 16px; color: var(--ink-2); margin-right: 10px; }
+  .tally { margin-top: 20px; font-size: 26px; }
+  .tally b { font-weight: 700; color: var(--accent, var(--blue)); font-size: 30px; }
+  .tally b.red { color: var(--red); }
+  .aside { font-size: 21px; line-height: 1.4; border-left: 6px solid var(--red); padding: 2px 0 2px 20px; margin-top: 18px; }
+  .verdicts .row { grid-template-columns: 1fr 220px; }
+  .verdicts .why { color: var(--ink); font-family: var(--serif); font-size: 21px; }
+
+  /* 6 The run */
+  .chart { width: 100%; height: 400px; display: block; }
+  .chart text { font-family: var(--head); fill: var(--ink-2); font-size: 18px; }
+  .chart .axis { stroke: var(--rule); stroke-width: 1.5; }
+  .chart .grid { stroke: var(--rule); stroke-width: 1; stroke-dasharray: 3 5; }
+  .chart rect.recall { fill: var(--recall); }
+  .chart rect.search { fill: var(--search); }
+  .chart rect.references { fill: var(--refs); }
+  .chart .bars rect { opacity: .5; }
+  .chart .trend { fill: none; stroke: var(--ink); stroke-width: 5; stroke-linejoin: round; stroke-linecap: round; }
+  .chart .trend-recall { fill: none; stroke: var(--recall); stroke-width: 5; stroke-dasharray: 1 10;
+                         stroke-linecap: round; }
+  .chart .phase { stroke: var(--ink-2); stroke-width: 1.5; stroke-dasharray: 6 6; }
+  .chart .ptitle { font-size: 19px; font-weight: 700; fill: var(--ink); }
+  .key { display: flex; gap: 26px; font-size: 19px; color: var(--ink-2); margin: -10px 0 0; flex-wrap: wrap; }
+  .key i { display: inline-block; width: 14px; height: 14px; border-radius: 2px; margin-right: 8px; vertical-align: -1px; opacity: .65; }
+  .key s { display: inline-block; width: 30px; height: 0; border-top: 5px solid var(--ink); margin-right: 8px; vertical-align: 4px; }
+  .key s.r { border-top: 5px dotted var(--recall); }
+  .notes3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; margin-top: 10px; }
+  .notes3 p { font-size: 20px; margin: 0; padding-top: 8px; border-top: 5px solid var(--c); }
+  .notes3 b { font-size: 27px; display: block; color: var(--c); }
+
+  /* 7 The output */
+  .files { list-style: none; margin: 0; padding: 0; }
+  .files li { font-size: 22px; line-height: 1.35; padding: 7px 0 7px 22px; border-bottom: 1px solid var(--rule); position: relative; }
+  .files li::before { content: ""; position: absolute; left: 0; top: 16px; width: 10px; height: 10px; border-radius: 2px; background: var(--c, var(--blue)); }
+  .files code { font-family: var(--mono); font-size: 20px; color: var(--ink); }
+  .netbox { background: var(--card); border: 1.5px solid var(--rule); border-top: 6px solid var(--refs); border-radius: 6px; padding: 14px; }
+  svg.net { width: 100%; height: 450px; display: block; }
+  svg.net .edges line { stroke: rgba(58, 42, 30, 0.13); stroke-width: 1; }
+  .legend { display: flex; gap: 22px; font-size: 18px; color: var(--ink-2); margin: 10px 4px 0; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 13px; height: 13px; border-radius: 50%; margin-right: 7px; vertical-align: -1px; }
+
+  /* 8 Compared */
+  table { border-collapse: collapse; width: 100%; font-size: 22px; line-height: 1.33; }
+  th, td { text-align: left; vertical-align: top; padding: 12px 18px; border-bottom: 1.5px solid var(--rule); }
+  th { font-size: 19px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); font-weight: 600; }
+  td:first-child { color: var(--ink-2); width: 19%; }
+  td.us { background: var(--blue-bg); color: var(--ink); }
+  th.us { background: var(--blue); color: #fff; }
+
+  /* 9 Guarantees, 10 Safety */
+  .ok-list, .no-list { list-style: none; padding: 0; margin: 0; }
+  .ok-list li, .no-list li { font-size: 25px; padding: 10px 0 10px 40px; position: relative; }
+  .ok-list li::before { content: "✓"; position: absolute; left: 0; color: var(--blue); font-weight: 700; }
+  .no-list li::before { content: "–"; position: absolute; left: 4px; color: var(--red); font-weight: 700; }
+  .ok-list b, .no-list b { font-weight: 700; }
+  h3 { font-size: 20px; letter-spacing: .08em; text-transform: uppercase; margin: 0 0 12px; font-weight: 700;
+       display: inline-block; padding: 5px 12px; border-radius: 3px; }
+  h3.blue { background: var(--blue-bg); color: var(--blue); }
+  h3.red { background: var(--red-bg); color: var(--red); }
+  .safe { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+  .safe .card { border-top: 6px solid var(--c); padding: 16px 20px; }
+  .safe h4 { margin: 0 0 6px; font-size: 25px; color: var(--c); }
+  .safe ul { margin: 0; padding: 0; list-style: none; }
+  .safe li { font-size: 19px; line-height: 1.38; padding: 8px 0; border-bottom: 1px solid var(--rule); }
+  .safe li:last-child { border-bottom: 0; }
+  .safe li .tag { font-size: 12px; padding: 2px 7px; margin-left: 4px; vertical-align: 2px; }
+  .safe code { font-family: var(--mono); font-size: 17px; }
+
+  #replay { position: absolute; right: 104px; bottom: 48px; display: none; font: inherit; font-size: 20px;
+            color: #fff; background: var(--blue); border: 0; border-radius: 6px;
+            padding: 10px 18px; cursor: pointer; z-index: 3; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+  /* On a phone held upright the slides are too small to read: ask for landscape. */
+  #rotate { display: none; }
+  @media (orientation: portrait) and (max-width: 700px) {
+    #rotate { display: flex; position: fixed; inset: 0; z-index: 10; background: var(--paper);
+              flex-direction: column; align-items: center; justify-content: center; gap: 22px;
+              padding: 24px; text-align: center; font-size: 20px; line-height: 1.4; }
+    #rotate img { width: 180px; height: auto; }
+    #rotate .phone { width: 46px; height: 76px; border: 4px solid var(--blue); border-radius: 9px;
+                     animation: turn 2.4s ease-in-out infinite; }
+    #rotate b { color: var(--blue); }
+  }
+  @keyframes turn { 0%, 30% { transform: rotate(0); } 60%, 100% { transform: rotate(-90deg); } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .slide, .slide.active, .rv, #head, #hint { transition: none; }
+    .rv { transform: none; }
+    #rotate .phone { animation: none; transform: rotate(-90deg); }
+  }
+</style>
+</head>
+<body>
+<div id="rotate" role="note">
+  <img src="paperraven.png" alt="">
+  <div class="phone" aria-hidden="true"></div>
+  <p><b>Turn your phone sideways</b><br>to read the slides.</p>
+</div>
+<div id="stage" aria-roledescription="slide deck">
+  <svg class="facets" viewBox="0 0 1600 300" preserveAspectRatio="none" aria-hidden="true">
+    <polygon points="0,0 520,0 300,150 0,110"/>
+    <polygon points="520,0 1010,0 760,120 300,150"/>
+    <polygon points="1010,0 1600,0 1600,90 1240,150 760,120"/>
+    <polygon points="0,110 300,150 0,190"/>
+  </svg>
+  <div id="head" aria-hidden="true">
+    <span class="mark"><img src="paperraven.png" alt=""></span>
+    <span class="brand">Paper<b>Raven</b></span><span id="sect"></span>
+    <span id="folio"></span>
+  </div>
+
+  <!-- 1 -->
+  <section class="slide" data-section="" aria-label="Title">
+    <div class="hero">
+      <div>
+        <h2>Generating topic-bounded, verified samples of the scientific literature</h2>
+        <p class="pitch">Give it your topic and a few papers you trust. It returns a corpus <span class="hl">checked</span> against the scholarly databases, <span class="hl">judged</span> against criteria you approve, and <span class="hl">documented</span> paper by paper.</p>
+        <div class="vs" aria-label="Compared with other ways of finding papers">
+          <span>ChatGPT suggests papers</span><span>Google Scholar matches keywords</span><span class="us">PaperRaven builds the corpus</span>
+        </div>
+        <p id="hint">One real run, on the evolution of whale body size. Press → or click to go on · ← back · F full screen</p>
+      </div>
+      <img src="paperraven.png" alt="The PaperRaven logo: an origami raven holding a magnifying glass over a printed paper, above the word PaperRaven">
+    </div>
+  </section>
+
+  <!-- 2 -->
+  <section class="slide" data-section="The input" data-accent="var(--seed)" aria-label="You bring a topic and a few papers">
+    <h2>You bring a topic and a few papers.</h2>
+    <div class="cols input">
+      <div>
+        <figure class="photo"><img src="whale.jpg" alt="Two blue whales swimming side by side, seen from the air, one of them spouting"><figcaption>Blue whales, Channel Islands National Marine Sanctuary · Photo: Anthony Lombardi / NOAA, public domain</figcaption></figure>
+        <p class="small muted">The topic, in the researcher's own words:</p>
+        <blockquote>Whale body size evolution. Literature on their size distribution, and all the evolutionary, metabolic, physiological, and life history constraints and patterns that relate to explaining why whales have the sizes they have. I'm particularly interested in papers with empirical data on whale sizes, which could be paleontological in nature. Taxonomic descriptions are out. Review papers are in.</blockquote>
+      </div>
+      <div class="rv" data-step="1">
+        <p class="small muted">Seven papers they knew belonged (PaperRaven asks for a half-dozen or so):</p>
+        <div class="seeds">
+          <div class="card seed"><span class="by">Downhower &amp; Blumer, 1988 · Nature</span><span class="title">Calculating just how small a whale can be</span></div>
+          <div class="card seed"><span class="by">Clauset &amp; Erwin, 2008 · Science</span><span class="title">The evolution and distribution of species body size</span></div>
+          <div class="card seed"><span class="by">Pyenson &amp; Sponberg, 2011 · Journal of Mammalian Evolution</span><span class="title">Reconstructing body size in extinct crown Cetacea (Neoceti) using allometry, phylogenetic methods and tests from the fossil record</span></div>
+          <div class="card seed"><span class="by">Clauset, 2013 · PLoS ONE</span><span class="title">How large should whales be?</span></div>
+          <div class="card seed"><span class="by">Heim et al., 2015 · Science</span><span class="title">Cope's rule in the evolution of marine animals</span></div>
+          <div class="card seed"><span class="by">Gearty, McClain &amp; Payne, 2018 · PNAS</span><span class="title">Energetic tradeoffs control the size distribution of aquatic mammals</span></div>
+          <div class="card seed"><span class="by">Árnason et al., 2018 · Science Advances</span><span class="title">Whole-genome sequencing of the blue whale and other rorquals finds signatures for introgressive gene flow</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 -->
+  <section class="slide" data-section="The criteria" data-accent="var(--blue)" aria-label="PaperRaven turns them into criteria you approve">
+    <h2>PaperRaven turns them into criteria you approve.</h2>
+    <p class="muted lead">It reads the seeds, asks where the boundary falls using real example papers, and writes down the answers. Four of them:</p>
+    <div class="crit">
+      <div class="card rv" data-step="1">
+        <div class="lab">Inclusion 4 <span class="tag you">yours</span></div>
+        <p>A description of a new fossil cetacean is in scope only if body size is a substantive result: an estimate with a stated method, or a discussion of the taxon's size within cetacean size evolution.</p>
+      </div>
+      <div class="card tool rv" data-step="1">
+        <div class="lab">Inclusion 5 <span class="tag tool">written by the tool</span></div>
+        <p>A study of living whales is in scope if it reports body length or mass across individuals, growth curves, or size at age or maturity.</p>
+      </div>
+      <div class="card rv" data-step="2">
+        <div class="lab">Exclusion 1 <span class="tag you">yours</span></div>
+        <p>Taxonomic descriptions are out.</p>
+      </div>
+      <div class="card rv" data-step="2">
+        <div class="lab">A ruling on a named paper <span class="tag you">yours</span></div>
+        <p>Bianucci et al. 2023 (Nature), which names <i>Perucetus colossus</i> and estimates its body mass, is in: a taxonomic description that reports a size estimate is in scope.</p>
+      </div>
+    </div>
+    <p class="tally rv" data-step="3">In all, <b>8</b> criteria and <b>6</b> judging notes: <b>13</b> of the 14 are the researcher's own, and 1 was written by the tool. The export marks which is which.</p>
+  </section>
+
+  <!-- 4 -->
+  <section class="slide" data-section="Checking" data-accent="var(--search)" aria-label="The LLM proposes; the code checks every paper">
+    <h2>The LLM proposes; the code checks every paper.</h2>
+    <p class="small muted lead">Round 20, as it happened: five proposals, each looked up in OpenAlex and Crossref.</p>
+    <div class="rows">
+      <div class="card row"><span class="title">Albicetus oxymycterus … and the evolution of body size in sperm whales<span class="yr">2015</span></span><span class="res"><span class="venue">PLoS ONE</span><span class="tag ok">verified</span></span></div>
+      <div class="card row refused rv" data-step="1"><span class="title">Body size of large odontocetes<span class="yr">2024</span></span><span class="res"><span class="tag no">refused</span></span>
+        <span class="why">Its DOI belongs to another paper: the database's record for that DOI is titled “A summary of intraspecific size variation for large odontocetes”. The titles do not agree, so nothing is guessed.</span></div>
+      <div class="card row"><span class="title">Investigating the relationship between body shape and life history traits in toothed whales<span class="yr">2023</span></span><span class="res"><span class="venue">Evolutionary Biology</span><span class="tag ok">verified</span></span></div>
+      <div class="card row"><span class="title">Origin and evolution of large brains in toothed whales<span class="yr">2004</span></span><span class="res"><span class="venue">The Anatomical Record</span><span class="tag ok">verified</span></span></div>
+      <div class="card row"><span class="title">A general model for the origin of allometric scaling laws in biology<span class="yr">1997</span></span><span class="res"><span class="venue">Science</span><span class="tag ok">verified</span></span></div>
+    </div>
+    <p class="aside rv" data-step="2">Close is not enough. Later, “100-million-year dynasty of giant planktivorous bony fishes” was refused (title similarity 0.85): the registered title goes on, “… in the Mesozoic Seas”. Proposed in full, it was verified.</p>
+    <p class="tally rv" data-step="3">Over the whole run: <b>279</b> proposed, <b>270</b> verified, <b class="red">9</b> not verified (5 of them during a database outage). Nothing unverified entered the corpus.</p>
+  </section>
+
+  <!-- 5 -->
+  <section class="slide" data-section="Judging" data-accent="var(--blue)" aria-label="A separate judge applies your criteria, and says why">
+    <h2>A separate judge applies your criteria, and says why.</h2>
+    <p class="small muted lead">The four verified papers from round 20, with the judge's own reasons:</p>
+    <div class="rows verdicts">
+      <div class="card row"><span class="title">Albicetus oxymycterus … and the evolution of body size in sperm whales<span class="yr">2015</span></span><span class="res"><span class="tag ok">in · Inclusion 4</span></span>
+        <span class="why">“Although a new-genus redescription, it estimates total length (~6 m) from cranial proxies with a stated method and discusses the evolution of body size in sperm whales.”</span></div>
+      <div class="card row out rv" data-step="1"><span class="title">A general model for the origin of allometric scaling laws in biology<span class="yr">1997</span></span><span class="res"><span class="tag no">out · Inclusion 2</span></span>
+        <span class="why">“General model of allometric scaling of metabolic rate across organisms; it is not about mammal or marine body-size evolution or the limits of animal size, and it does not study whales.”</span></div>
+      <div class="card row rv" data-step="2"><span class="title">Origin and evolution of large brains in toothed whales<span class="yr">2004</span></span><span class="res"><span class="tag ok">in</span></span>
+        <span class="why">“Estimates body size for 36 fossil cetaceans by CT and analyses brain-to-body-size change over 47 Myr …”</span></div>
+      <div class="card row rv" data-step="2"><span class="title">Investigating the relationship between body shape and life history traits in toothed whales<span class="yr">2023</span></span><span class="res"><span class="tag ok">in</span></span>
+        <span class="why">“… relates life-history traits to size-related measures.”</span></div>
+    </div>
+    <p class="tally rv" data-step="3">Over the whole run: <b>200</b> in, <b class="red">44</b> out, and <b>26</b> the judge could not decide, left for the researcher to rule on. The judge is a model, so calls near the boundary could differ if judged again: every reason is kept.</p>
+  </section>
+
+  <!-- 6 -->
+  <section class="slide" data-section="The run" data-accent="var(--refs)" aria-label="The LLM's own recall thins; search, then the corpus's own citations, take up the slack">
+    <h2>The LLM's own recall thins; search, then the corpus's own citations, take up the slack.</h2>
+    <div class="key"><span><i style="background:var(--recall)"></i>from the LLM's recall</span><span><i style="background:var(--search)"></i>from its web searches</span><span><i style="background:var(--refs)"></i>from the corpus's reference lists</span><span><s></s>all sources, 5-round average</span><span><s class="r"></s>recall alone, 5-round average</span></div>
+    <svg class="chart" id="chart" viewBox="0 0 1392 400" role="img" aria-label="Papers in the final corpus by the round that found them and how, rounds 1 to 56, with five-round averages"></svg>
+    <div class="notes3">
+      <p class="rv" data-step="1" style="--c:var(--recall)"><b>4.4 a round</b>rounds 1–14: all from the LLM's own recall.</p>
+      <p class="rv" data-step="2" style="--c:var(--search)"><b>recall 4.4 → 2.2</b>rounds 15–35: recall thins, and web searches for recent work fill in (1.3 a round). By rounds 26–35 the total is down to 2.8.</p>
+      <p class="rv" data-step="3" style="--c:var(--refs)"><b>3.1 a round</b>rounds 36–56: the works the corpus cites, ranked, proposed in place of recall. 64 papers, among them Mackintosh &amp; Wheeler 1929, now cited by 16.</p>
+    </div>
+  </section>
+
+  <!-- 7 -->
+  <section class="slide" data-section="The output" data-accent="var(--refs)" aria-label="What you get">
+    <h2>What you get: a corpus with its reasons, a citation network, and the PDFs.</h2>
+    <div class="cols" style="grid-template-columns: 1fr 1.05fr">
+      <ul class="files">
+        <li style="--c:var(--blue)"><code>README.md</code> <span class="muted">start here: the topic, the criteria, how the run went</span></li>
+        <li style="--c:var(--blue)"><code>papers.bib</code>, <code>papers.csv</code> <span class="muted">207 papers, each with why it is in</span></li>
+        <li style="--c:var(--red)"><code>excluded.csv</code> <span class="muted">each exclusion, its criterion and reason</span></li>
+        <li style="--c:var(--seed)"><code>uncertain.csv</code> <span class="muted">the undecided, yours to rule on</span></li>
+        <li style="--c:var(--search)"><code>worklist.csv</code> <span class="muted">how to get each PDF, open access first</span></li>
+        <li style="--c:var(--refs)"><code>citation_network.html</code>, <code>citations.csv</code> <span class="muted">who cites whom</span></li>
+        <li style="--c:var(--ink-2)"><code>audit/</code> <span class="muted">everything behind it, for checking</span></li>
+        <li class="rv" data-step="1" style="--c:var(--search);border:0"><b>PDFs:</b> <span class="muted">off campus, fetch got 40; the other 167 went on a click-list, one link each, for the researcher to download.</span></li>
+      </ul>
+      <div class="netbox">
+        <!-- network-still --><svg class="net" viewBox="-342.9 -479.6 722.4 945" role="img" aria-label="The citation network of the whale run: 188 papers in its main connected cloud, coloured by how each was found"><g class="edges"><line x1="168.9" y1="134.1" x2="174.7" y2="176.7"/><line x1="168.9" y1="134.1" x2="261.2" y2="172.1"/><line x1="-121" y1="272.9" x2="-233.5" y2="203.8"/><line x1="-121" y1="272.9" x2="-252.2" y2="174"/><line x1="-121" y1="272.9" x2="-81.7" y2="262.8"/><line x1="-121" y1="272.9" x2="94.6" y2="147.7"/><line x1="-121" y1="272.9" x2="-61.9" y2="303.7"/><line x1="-121" y1="272.9" x2="96.9" y2="217.2"/><line x1="-121" y1="272.9" x2="-93.6" y2="118.7"/><line x1="-121" y1="272.9" x2="-85" y2="395"/><line x1="-121" y1="272.9" x2="-172.8" y2="334.5"/><line x1="-121" y1="272.9" x2="-95.5" y2="334.5"/><line x1="-121" y1="272.9" x2="7.5" y2="243.3"/><line x1="-34.7" y1="-349.2" x2="-144.8" y2="-389.4"/><line x1="-34.7" y1="-349.2" x2="25.6" y2="-362.8"/><line x1="-34.7" y1="-349.2" x2="-21.8" y2="-393.1"/><line x1="288.2" y1="-240.3" x2="367.6" y2="-166.4"/><line x1="288.2" y1="-240.3" x2="189" y2="-136.8"/><line x1="-224.7" y1="120.4" x2="-121" y2="272.9"/><line x1="-224.7" y1="120.4" x2="-211.5" y2="313.6"/><line x1="-224.7" y1="120.4" x2="-239.4" y2="21.3"/><line x1="-224.7" y1="120.4" x2="-249.7" y2="84.7"/><line x1="-224.7" y1="120.4" x2="-257.5" y2="138.8"/><line x1="-224.7" y1="120.4" x2="-233.5" y2="203.8"/><line x1="-224.7" y1="120.4" x2="-252.2" y2="174"/><line x1="-224.7" y1="120.4" x2="-38.6" y2="175.2"/><line x1="-224.7" y1="120.4" x2="-200.5" y2="164.6"/><line x1="-224.7" y1="120.4" x2="-330.9" y2="262.5"/><line x1="-224.7" y1="120.4" x2="-167.4" y2="254.8"/><line x1="-224.7" y1="120.4" x2="-136" y2="80"/><line x1="-224.7" y1="120.4" x2="-169.6" y2="-154"/><line x1="-224.7" y1="120.4" x2="-93.6" y2="118.7"/><line x1="-224.7" y1="120.4" x2="-165.7" y2="173"/><line x1="-224.7" y1="120.4" x2="-287.6" y2="263.9"/><line x1="-224.7" y1="120.4" x2="141.3" y2="24.5"/><line x1="-224.7" y1="120.4" x2="49.6" y2="166.3"/><line x1="111.2" y1="-333.5" x2="161.6" y2="-50.6"/><line x1="111.2" y1="-333.5" x2="-34.7" y2="-349.2"/><line x1="111.2" y1="-333.5" x2="20.4" y2="-263.2"/><line x1="111.2" y1="-333.5" x2="116.7" y2="-371.2"/><line x1="111.2" y1="-333.5" x2="69.7" y2="-467.6"/><line x1="111.2" y1="-333.5" x2="-15.1" y2="-198.4"/><line x1="111.2" y1="-333.5" x2="-21.8" y2="-393.1"/><line x1="111.2" y1="-333.5" x2="60.5" y2="-420.4"/><line x1="111.2" y1="-333.5" x2="61.3" y2="-363.7"/><line x1="-21.1" y1="266.6" x2="-81.7" y2="262.8"/><line x1="-21.1" y1="266.6" x2="94.6" y2="147.7"/><line x1="-21.1" y1="266.6" x2="-38.3" y2="311"/><line x1="-211.5" y1="313.6" x2="-117.7" y2="300.2"/><line x1="-211.5" y1="313.6" x2="-57.1" y2="242.2"/><line x1="-211.5" y1="313.6" x2="-95.5" y2="334.5"/><line x1="330.6" y1="-171.1" x2="318.3" y2="-99.7"/><line x1="330.6" y1="-171.1" x2="367.6" y2="-166.4"/><line x1="330.6" y1="-171.1" x2="231.1" y2="-137.1"/><line x1="330.6" y1="-171.1" x2="189" y2="-136.8"/><line x1="151.9" y1="-118.7" x2="111.2" y2="-333.5"/><line x1="151.9" y1="-118.7" x2="211.7" y2="-75"/><line x1="151.9" y1="-118.7" x2="94.6" y2="147.7"/><line x1="151.9" y1="-118.7" x2="-45.8" y2="-187.8"/><line x1="151.9" y1="-118.7" x2="189" y2="-136.8"/><line x1="-155.9" y1="218.8" x2="-121" y2="272.9"/><line x1="-155.9" y1="218.8" x2="-211.5" y2="313.6"/><line x1="-155.9" y1="218.8" x2="-239.4" y2="21.3"/><line x1="-155.9" y1="218.8" x2="-44.6" y2="90.4"/><line x1="-155.9" y1="218.8" x2="-61.6" y2="131.9"/><line x1="-155.9" y1="218.8" x2="-200.5" y2="164.6"/><line x1="-155.9" y1="218.8" x2="-205.3" y2="406"/><line x1="-155.9" y1="218.8" x2="-100" y2="33.9"/><line x1="-155.9" y1="218.8" x2="127.1" y2="129.3"/><line x1="-155.9" y1="218.8" x2="97.8" y2="47.8"/><line x1="-155.9" y1="218.8" x2="-282.7" y2="321.4"/><line x1="-155.9" y1="218.8" x2="-229.4" y2="386.1"/><line x1="-155.9" y1="218.8" x2="-172.8" y2="334.5"/><line x1="-155.9" y1="218.8" x2="30.5" y2="298.5"/><line x1="-155.9" y1="218.8" x2="-263.3" y2="232.5"/><line x1="-155.9" y1="218.8" x2="-287.6" y2="263.9"/><line x1="-155.9" y1="218.8" x2="49.6" y2="166.3"/><line x1="219.9" y1="-181.9" x2="330.6" y2="-171.1"/><line x1="219.9" y1="-181.9" x2="324.6" y2="-123.9"/><line x1="219.9" y1="-181.9" x2="20.4" y2="-263.2"/><line x1="219.9" y1="-181.9" x2="318.3" y2="-99.7"/><line x1="219.9" y1="-181.9" x2="185.1" y2="-27.5"/><line x1="219.9" y1="-181.9" x2="231.1" y2="-137.1"/><line x1="219.9" y1="-181.9" x2="174.9" y2="-178.4"/><line x1="219.9" y1="-181.9" x2="189" y2="-136.8"/><line x1="219.9" y1="-181.9" x2="-91.7" y2="-260.1"/><line x1="219.9" y1="-181.9" x2="37.6" y2="-177"/><line x1="219.9" y1="-181.9" x2="230.8" y2="-25.1"/><line x1="346.3" y1="-196.6" x2="288.2" y2="-240.3"/><line x1="346.3" y1="-196.6" x2="330.6" y2="-171.1"/><line x1="346.3" y1="-196.6" x2="219.9" y2="-181.9"/><line x1="346.3" y1="-196.6" x2="324.6" y2="-123.9"/><line x1="346.3" y1="-196.6" x2="318.3" y2="-99.7"/><line x1="346.3" y1="-196.6" x2="185.1" y2="-27.5"/><line x1="346.3" y1="-196.6" x2="367.6" y2="-166.4"/><line x1="346.3" y1="-196.6" x2="231.1" y2="-137.1"/><line x1="346.3" y1="-196.6" x2="189" y2="-136.8"/><line x1="346.3" y1="-196.6" x2="251.5" y2="-194.4"/><line x1="346.3" y1="-196.6" x2="295.8" y2="-215.1"/><line x1="-258.8" y1="273" x2="-121" y2="272.9"/><line x1="-258.8" y1="273" x2="-224.7" y2="120.4"/><line x1="-258.8" y1="273" x2="-155.9" y2="218.8"/><line x1="-258.8" y1="273" x2="-61.6" y2="131.9"/><line x1="-258.8" y1="273" x2="-245.7" y2="330.4"/><line x1="-258.8" y1="273" x2="-310.2" y2="204.5"/><line x1="-258.8" y1="273" x2="-330.9" y2="262.5"/><line x1="-258.8" y1="273" x2="-283.9" y2="382.3"/><line x1="-258.8" y1="273" x2="-210.3" y2="281.2"/><line x1="-258.8" y1="273" x2="-74.2" y2="205.1"/><line x1="-258.8" y1="273" x2="-229.4" y2="386.1"/><line x1="168" y1="-309.1" x2="116.7" y2="-371.2"/><line x1="168" y1="-309.1" x2="163.1" y2="-224.4"/><line x1="153.4" y1="-156.3" x2="42.8" y2="-311.5"/><line x1="153.4" y1="-156.3" x2="231.1" y2="-137.1"/><line x1="153.4" y1="-156.3" x2="251.5" y2="-194.4"/><line x1="-44.6" y1="90.4" x2="59.7" y2="100.5"/><line x1="-61.6" y1="131.9" x2="-136" y2="80"/><line x1="-61.6" y1="131.9" x2="59.7" y2="100.5"/><line x1="-145.8" y1="-340.5" x2="-144.8" y2="-389.4"/><line x1="-145.8" y1="-340.5" x2="-21.8" y2="-393.1"/><line x1="324.6" y1="-123.9" x2="272.1" y2="-32.5"/><line x1="324.6" y1="-123.9" x2="367.6" y2="-166.4"/><line x1="324.6" y1="-123.9" x2="235" y2="74.1"/><line x1="324.6" y1="-123.9" x2="231.1" y2="-137.1"/><line x1="324.6" y1="-123.9" x2="174.9" y2="-178.4"/><line x1="324.6" y1="-123.9" x2="189" y2="-136.8"/><line x1="324.6" y1="-123.9" x2="295.8" y2="-215.1"/><line x1="-245.7" y1="330.4" x2="-211.5" y2="313.6"/><line x1="-245.7" y1="330.4" x2="-233.5" y2="203.8"/><line x1="-245.7" y1="330.4" x2="-117.7" y2="300.2"/><line x1="-245.7" y1="330.4" x2="-330.9" y2="262.5"/><line x1="-245.7" y1="330.4" x2="-210.3" y2="281.2"/><line x1="-245.7" y1="330.4" x2="-130.1" y2="222.8"/><line x1="-245.7" y1="330.4" x2="-205.3" y2="406"/><line x1="-245.7" y1="330.4" x2="-165.4" y2="373.6"/><line x1="-245.7" y1="330.4" x2="-93.6" y2="118.7"/><line x1="-245.7" y1="330.4" x2="-229.4" y2="386.1"/><line x1="-245.7" y1="330.4" x2="-172.8" y2="334.5"/><line x1="34.1" y1="-1.2" x2="168.9" y2="134.1"/><line x1="34.1" y1="-1.2" x2="-136" y2="80"/><line x1="34.1" y1="-1.2" x2="116.7" y2="-98.3"/><line x1="34.1" y1="-1.2" x2="18.5" y2="-140.5"/><line x1="34.1" y1="-1.2" x2="172.6" y2="75"/><line x1="34.1" y1="-1.2" x2="154.7" y2="102.2"/><line x1="34.1" y1="-1.2" x2="143" y2="55.1"/><line x1="34.1" y1="-1.2" x2="74.9" y2="-75.4"/><line x1="34.1" y1="-1.2" x2="185.1" y2="-27.5"/><line x1="34.1" y1="-1.2" x2="93.6" y2="87.9"/><line x1="34.1" y1="-1.2" x2="127.1" y2="129.3"/><line x1="34.1" y1="-1.2" x2="-106.5" y2="171.6"/><line x1="34.1" y1="-1.2" x2="97.8" y2="47.8"/><line x1="34.1" y1="-1.2" x2="112.4" y2="-15.4"/><line x1="34.1" y1="-1.2" x2="-169.6" y2="-154"/><line x1="34.1" y1="-1.2" x2="94.6" y2="147.7"/><line x1="34.1" y1="-1.2" x2="-93.6" y2="118.7"/><line x1="34.1" y1="-1.2" x2="109.1" y2="-59"/><line x1="34.1" y1="-1.2" x2="189" y2="-136.8"/><line x1="34.1" y1="-1.2" x2="-58.2" y2="-228.2"/><line x1="34.1" y1="-1.2" x2="230.8" y2="-25.1"/><line x1="34.1" y1="-1.2" x2="49.6" y2="166.3"/><line x1="-257.5" y1="138.8" x2="-136" y2="80"/><line x1="-257.5" y1="138.8" x2="-106.5" y2="171.6"/><line x1="-257.5" y1="138.8" x2="-135.9" y2="115.3"/><line x1="-257.5" y1="138.8" x2="-165.5" y2="299.1"/><line x1="-257.5" y1="138.8" x2="-93.6" y2="118.7"/><line x1="-233.5" y1="203.8" x2="-211.5" y2="313.6"/><line x1="-233.5" y1="203.8" x2="-61.6" y2="131.9"/><line x1="-233.5" y1="203.8" x2="-310.2" y2="204.5"/><line x1="-233.5" y1="203.8" x2="-284.5" y2="167.8"/><line x1="-233.5" y1="203.8" x2="-257.5" y2="138.8"/><line x1="-233.5" y1="203.8" x2="-93.6" y2="118.7"/><line x1="-233.5" y1="203.8" x2="-47.6" y2="58.8"/><line x1="-233.5" y1="203.8" x2="-172.8" y2="334.5"/><line x1="-252.2" y1="174" x2="-211.5" y2="313.6"/><line x1="-252.2" y1="174" x2="-239.4" y2="21.3"/><line x1="-252.2" y1="174" x2="-61.6" y2="131.9"/><line x1="-252.2" y1="174" x2="-257.5" y2="138.8"/><line x1="-252.2" y1="174" x2="-233.5" y2="203.8"/><line x1="-252.2" y1="174" x2="-330.9" y2="262.5"/><line x1="-252.2" y1="174" x2="-130.1" y2="222.8"/><line x1="-252.2" y1="174" x2="-136" y2="80"/><line x1="-252.2" y1="174" x2="-93.6" y2="118.7"/><line x1="-38.6" y1="175.2" x2="-21.1" y2="266.6"/><line x1="-38.6" y1="175.2" x2="-61.6" y2="131.9"/><line x1="-38.6" y1="175.2" x2="-233.5" y2="203.8"/><line x1="-38.6" y1="175.2" x2="-252.2" y2="174"/><line x1="-38.6" y1="175.2" x2="-81.7" y2="262.8"/><line x1="-38.6" y1="175.2" x2="154.7" y2="102.2"/><line x1="-38.6" y1="175.2" x2="103.9" y2="17.4"/><line x1="-38.6" y1="175.2" x2="94.6" y2="147.7"/><line x1="-38.6" y1="175.2" x2="96.9" y2="217.2"/><line x1="-38.6" y1="175.2" x2="-47.6" y2="58.8"/><line x1="-38.6" y1="175.2" x2="-38.3" y2="311"/><line x1="-38.6" y1="175.2" x2="212" y2="45.4"/><line x1="-38.6" y1="175.2" x2="37.2" y2="28.4"/><line x1="-198.6" y1="200.5" x2="-61.6" y2="131.9"/><line x1="-198.6" y1="200.5" x2="-257.5" y2="138.8"/><line x1="-198.6" y1="200.5" x2="-233.5" y2="203.8"/><line x1="-198.6" y1="200.5" x2="-252.2" y2="174"/><line x1="-198.6" y1="200.5" x2="-38.6" y2="175.2"/><line x1="-198.6" y1="200.5" x2="-330.9" y2="262.5"/><line x1="-198.6" y1="200.5" x2="-210.3" y2="281.2"/><line x1="-198.6" y1="200.5" x2="-81.7" y2="262.8"/><line x1="-198.6" y1="200.5" x2="-106.5" y2="171.6"/><line x1="-198.6" y1="200.5" x2="-93.6" y2="118.7"/><line x1="-198.6" y1="200.5" x2="-47.6" y2="58.8"/><line x1="-198.6" y1="200.5" x2="-38.3" y2="311"/><line x1="-200.5" y1="164.6" x2="-211.5" y2="313.6"/><line x1="-200.5" y1="164.6" x2="-239.4" y2="21.3"/><line x1="-200.5" y1="164.6" x2="-61.6" y2="131.9"/><line x1="-200.5" y1="164.6" x2="-310.2" y2="204.5"/><line x1="-200.5" y1="164.6" x2="-233.5" y2="203.8"/><line x1="-200.5" y1="164.6" x2="-252.2" y2="174"/><line x1="-200.5" y1="164.6" x2="-38.6" y2="175.2"/><line x1="-200.5" y1="164.6" x2="-198.6" y2="200.5"/><line x1="-200.5" y1="164.6" x2="-210.3" y2="281.2"/><line x1="-200.5" y1="164.6" x2="-167.4" y2="254.8"/><line x1="-200.5" y1="164.6" x2="-136" y2="80"/><line x1="-200.5" y1="164.6" x2="94.6" y2="147.7"/><line x1="-200.5" y1="164.6" x2="96.9" y2="217.2"/><line x1="-200.5" y1="164.6" x2="-263.3" y2="232.5"/><line x1="42.8" y1="-311.5" x2="-34.7" y2="-349.2"/><line x1="42.8" y1="-311.5" x2="-45.5" y2="-446.7"/><line x1="42.8" y1="-311.5" x2="25.6" y2="-394.7"/><line x1="42.8" y1="-311.5" x2="63" y2="-256.8"/><line x1="42.8" y1="-311.5" x2="-5.3" y2="-235.7"/><line x1="42.8" y1="-311.5" x2="116.7" y2="-371.2"/><line x1="42.8" y1="-311.5" x2="-21.8" y2="-393.1"/><line x1="42.8" y1="-311.5" x2="60.5" y2="-420.4"/><line x1="25.6" y1="-394.7" x2="-34.7" y2="-349.2"/><line x1="25.6" y1="-394.7" x2="-45.5" y2="-446.7"/><line x1="25.6" y1="-394.7" x2="-86.2" y2="-387.2"/><line x1="25.6" y1="-394.7" x2="-1.8" y2="-350.7"/><line x1="25.6" y1="-394.7" x2="-0.5" y2="-321.7"/><line x1="25.6" y1="-394.7" x2="-21.8" y2="-393.1"/><line x1="25.6" y1="-394.7" x2="60.5" y2="-420.4"/><line x1="0.7" y1="-435.4" x2="-45.5" y2="-446.7"/><line x1="0.7" y1="-435.4" x2="25.6" y2="-394.7"/><line x1="0.7" y1="-435.4" x2="-86.2" y2="-387.2"/><line x1="0.7" y1="-435.4" x2="-0.5" y2="-321.7"/><line x1="63" y1="-256.8" x2="-34.7" y2="-349.2"/><line x1="63" y1="-256.8" x2="25.6" y2="-394.7"/><line x1="63" y1="-256.8" x2="0.7" y2="-435.4"/><line x1="63" y1="-256.8" x2="-5.3" y2="-235.7"/><line x1="63" y1="-256.8" x2="154.7" y2="102.2"/><line x1="63" y1="-256.8" x2="-86.2" y2="-387.2"/><line x1="63" y1="-256.8" x2="90.8" y2="-97.1"/><line x1="63" y1="-256.8" x2="-1.8" y2="-350.7"/><line x1="63" y1="-256.8" x2="203.1" y2="19.3"/><line x1="63" y1="-256.8" x2="-0.5" y2="-321.7"/><line x1="63" y1="-256.8" x2="-58.2" y2="-228.2"/><line x1="63" y1="-256.8" x2="-21.8" y2="-393.1"/><line x1="63" y1="-256.8" x2="60.5" y2="-420.4"/><line x1="-80.1" y1="-432.4" x2="-34.7" y2="-349.2"/><line x1="-80.1" y1="-432.4" x2="-45.5" y2="-446.7"/><line x1="-80.1" y1="-432.4" x2="25.6" y2="-394.7"/><line x1="-80.1" y1="-432.4" x2="-169.6" y2="-154"/><line x1="-80.1" y1="-432.4" x2="-86.2" y2="-387.2"/><line x1="-80.1" y1="-432.4" x2="-21.8" y2="-393.1"/><line x1="174.7" y1="176.7" x2="94.6" y2="147.7"/><line x1="174.7" y1="176.7" x2="-57.1" y2="242.2"/><line x1="174.7" y1="176.7" x2="261.2" y2="172.1"/><line x1="-117.7" y1="300.2" x2="-57.1" y2="242.2"/><line x1="-330.9" y1="262.5" x2="-233.5" y2="203.8"/><line x1="-330.9" y1="262.5" x2="-283.9" y2="382.3"/><line x1="-330.9" y1="262.5" x2="-210.3" y2="281.2"/><line x1="-330.9" y1="262.5" x2="-130.1" y2="222.8"/><line x1="-5.3" y1="-235.7" x2="-1.8" y2="-350.7"/><line x1="-283.9" y1="382.3" x2="-229.4" y2="386.1"/><line x1="-283.9" y1="382.3" x2="-102.9" y2="422.5"/><line x1="-210.3" y1="281.2" x2="-205.3" y2="406"/><line x1="-210.3" y1="281.2" x2="-172.8" y2="334.5"/><line x1="-210.3" y1="281.2" x2="-273.2" y2="411.7"/><line x1="-130.1" y1="222.8" x2="-210.3" y2="281.2"/><line x1="-130.1" y1="222.8" x2="-205.3" y2="406"/><line x1="-130.1" y1="222.8" x2="-16.5" y2="157"/><line x1="-130.1" y1="222.8" x2="-172.8" y2="334.5"/><line x1="20.4" y1="-263.2" x2="-34.7" y2="-349.2"/><line x1="20.4" y1="-263.2" x2="-95.9" y2="-159.4"/><line x1="20.4" y1="-263.2" x2="-15.1" y2="-198.4"/><line x1="20.4" y1="-263.2" x2="-21.8" y2="-393.1"/><line x1="-205.3" y1="406" x2="-283.9" y2="382.3"/><line x1="-205.3" y1="406" x2="-165.4" y2="373.6"/><line x1="-205.3" y1="406" x2="-229.4" y2="386.1"/><line x1="-205.3" y1="406" x2="-193.9" y2="453.4"/><line x1="-205.3" y1="406" x2="-172.8" y2="334.5"/><line x1="-205.3" y1="406" x2="-273.2" y2="411.7"/><line x1="-205.3" y1="406" x2="-102.9" y2="422.5"/><line x1="-95.7" y1="-17.8" x2="-239.4" y2="21.3"/><line x1="-95.7" y1="-17.8" x2="125.8" y2="89.9"/><line x1="-95.7" y1="-17.8" x2="-135.9" y2="115.3"/><line x1="-95.7" y1="-17.8" x2="109.1" y2="-59"/><line x1="-95.7" y1="-17.8" x2="-200.4" y2="-153.5"/><line x1="116.7" y1="-371.2" x2="-34.7" y2="-349.2"/><line x1="116.7" y1="-371.2" x2="-0.5" y2="-321.7"/><line x1="116.7" y1="-371.2" x2="-21.8" y2="-393.1"/><line x1="116.7" y1="-371.2" x2="60.5" y2="-420.4"/><line x1="318.3" y1="-99.7" x2="116.7" y2="-98.3"/><line x1="318.3" y1="-99.7" x2="367.6" y2="-166.4"/><line x1="318.3" y1="-99.7" x2="203.1" y2="19.3"/><line x1="318.3" y1="-99.7" x2="231.1" y2="-137.1"/><line x1="318.3" y1="-99.7" x2="227.2" y2="-238.8"/><line x1="318.3" y1="-99.7" x2="189" y2="-136.8"/><line x1="318.3" y1="-99.7" x2="251.5" y2="-194.4"/><line x1="318.3" y1="-99.7" x2="295.8" y2="-215.1"/><line x1="318.3" y1="-99.7" x2="259.4" y2="117"/><line x1="-81.7" y1="262.8" x2="-211.5" y2="313.6"/><line x1="-81.7" y1="262.8" x2="-205.3" y2="406"/><line x1="-81.7" y1="262.8" x2="-136" y2="80"/><line x1="-81.7" y1="262.8" x2="-100" y2="33.9"/><line x1="-81.7" y1="262.8" x2="-16.5" y2="157"/><line x1="-81.7" y1="262.8" x2="-106.5" y2="171.6"/><line x1="-81.7" y1="262.8" x2="-135.9" y2="115.3"/><line x1="-81.7" y1="262.8" x2="-165.5" y2="299.1"/><line x1="-81.7" y1="262.8" x2="94.6" y2="147.7"/><line x1="-81.7" y1="262.8" x2="96.9" y2="217.2"/><line x1="-81.7" y1="262.8" x2="59.7" y2="100.5"/><line x1="-81.7" y1="262.8" x2="54.7" y2="343.8"/><line x1="-81.7" y1="262.8" x2="-38.3" y2="311"/><line x1="-81.7" y1="262.8" x2="-57.1" y2="242.2"/><line x1="-81.7" y1="262.8" x2="-165.7" y2="173"/><line x1="-81.7" y1="262.8" x2="-85" y2="395"/><line x1="-81.7" y1="262.8" x2="-172.8" y2="334.5"/><line x1="-81.7" y1="262.8" x2="8.7" y2="362.6"/><line x1="-81.7" y1="262.8" x2="30.5" y2="298.5"/><line x1="-167.4" y1="254.8" x2="-21.1" y2="266.6"/><line x1="-167.4" y1="254.8" x2="-61.6" y2="131.9"/><line x1="-167.4" y1="254.8" x2="-252.2" y2="174"/><line x1="-167.4" y1="254.8" x2="-38.6" y2="175.2"/><line x1="-167.4" y1="254.8" x2="-198.6" y2="200.5"/><line x1="-167.4" y1="254.8" x2="-81.7" y2="262.8"/><line x1="-167.4" y1="254.8" x2="-38.3" y2="311"/><line x1="-167.4" y1="254.8" x2="-172.8" y2="334.5"/><line x1="-136" y1="80" x2="-249.7" y2="84.7"/><line x1="-136" y1="80" x2="59.7" y2="100.5"/><line x1="257.9" y1="24.3" x2="125.8" y2="89.9"/><line x1="257.9" y1="24.3" x2="202.4" y2="95.4"/><line x1="257.9" y1="24.3" x2="172.6" y2="75"/><line x1="257.9" y1="24.3" x2="154.7" y2="102.2"/><line x1="257.9" y1="24.3" x2="268.9" y2="79.1"/><line x1="257.9" y1="24.3" x2="203.1" y2="19.3"/><line x1="257.9" y1="24.3" x2="231.1" y2="-137.1"/><line x1="257.9" y1="24.3" x2="141.3" y2="24.5"/><line x1="144.3" y1="234.8" x2="-61.6" y2="131.9"/><line x1="144.3" y1="234.8" x2="125.8" y2="89.9"/><line x1="144.3" y1="234.8" x2="272.1" y2="-32.5"/><line x1="144.3" y1="234.8" x2="235" y2="74.1"/><line x1="144.3" y1="234.8" x2="8.7" y2="362.6"/><line x1="144.3" y1="234.8" x2="68" y2="304.8"/><line x1="144.3" y1="234.8" x2="88.4" y2="366.3"/><line x1="-170.1" y1="7.5" x2="-100" y2="33.9"/><line x1="18.5" y1="-140.5" x2="-34.7" y2="-349.2"/><line x1="18.5" y1="-140.5" x2="42.8" y2="-311.5"/><line x1="18.5" y1="-140.5" x2="-5.3" y2="-235.7"/><line x1="18.5" y1="-140.5" x2="172.6" y2="75"/><line x1="18.5" y1="-140.5" x2="143" y2="55.1"/><line x1="18.5" y1="-140.5" x2="38.8" y2="-278.2"/><line x1="18.5" y1="-140.5" x2="-41.6" y2="-313.3"/><line x1="18.5" y1="-140.5" x2="35" y2="50.8"/><line x1="18.5" y1="-140.5" x2="-143.8" y2="-256.1"/><line x1="18.5" y1="-140.5" x2="121.6" y2="-189.3"/><line x1="18.5" y1="-140.5" x2="203.1" y2="19.3"/><line x1="18.5" y1="-140.5" x2="174.9" y2="-178.4"/><line x1="18.5" y1="-140.5" x2="-45.8" y2="-187.8"/><line x1="18.5" y1="-140.5" x2="189" y2="-136.8"/><line x1="18.5" y1="-140.5" x2="-0.5" y2="-321.7"/><line x1="18.5" y1="-140.5" x2="-15.1" y2="-198.4"/><line x1="18.5" y1="-140.5" x2="-58.2" y2="-228.2"/><line x1="18.5" y1="-140.5" x2="37.2" y2="28.4"/><line x1="18.5" y1="-140.5" x2="141.3" y2="24.5"/><line x1="-16.5" y1="157" x2="-44.6" y2="90.4"/><line x1="-16.5" y1="157" x2="-61.6" y2="131.9"/><line x1="211.7" y1="-75" x2="94.6" y2="147.7"/><line x1="211.7" y1="-75" x2="163.1" y2="-224.4"/><line x1="211.7" y1="-75" x2="121.6" y2="-189.3"/><line x1="211.7" y1="-75" x2="231.1" y2="-137.1"/><line x1="-74.2" y1="205.1" x2="-21.1" y2="266.6"/><line x1="-74.2" y1="205.1" x2="94.1" y2="195.6"/><line x1="-74.2" y1="205.1" x2="-245.7" y2="330.4"/><line x1="-74.2" y1="205.1" x2="-233.5" y2="203.8"/><line x1="-74.2" y1="205.1" x2="-252.2" y2="174"/><line x1="-74.2" y1="205.1" x2="-38.6" y2="175.2"/><line x1="-74.2" y1="205.1" x2="-198.6" y2="200.5"/><line x1="-74.2" y1="205.1" x2="103.9" y2="17.4"/><line x1="-74.2" y1="205.1" x2="185.1" y2="-27.5"/><line x1="-74.2" y1="205.1" x2="-165.4" y2="373.6"/><line x1="-74.2" y1="205.1" x2="94.6" y2="147.7"/><line x1="-74.2" y1="205.1" x2="-5" y2="2.8"/><line x1="-74.2" y1="205.1" x2="-38.3" y2="311"/><line x1="202.4" y1="95.4" x2="168.9" y2="134.1"/><line x1="202.4" y1="95.4" x2="161.6" y2="-50.6"/><line x1="202.4" y1="95.4" x2="94.1" y2="195.6"/><line x1="202.4" y1="95.4" x2="-61.6" y2="131.9"/><line x1="202.4" y1="95.4" x2="174.7" y2="176.7"/><line x1="202.4" y1="95.4" x2="125.8" y2="89.9"/><line x1="202.4" y1="95.4" x2="94.6" y2="147.7"/><line x1="202.4" y1="95.4" x2="96.9" y2="217.2"/><line x1="202.4" y1="95.4" x2="59.7" y2="100.5"/><line x1="202.4" y1="95.4" x2="90.8" y2="-97.1"/><line x1="202.4" y1="95.4" x2="179.4" y2="42.3"/><line x1="202.4" y1="95.4" x2="239.7" y2="142"/><line x1="202.4" y1="95.4" x2="199.4" y2="179.2"/><line x1="202.4" y1="95.4" x2="49.6" y2="166.3"/><line x1="172.6" y1="75" x2="168.9" y2="134.1"/><line x1="172.6" y1="75" x2="161.6" y2="-50.6"/><line x1="172.6" y1="75" x2="-61.6" y2="131.9"/><line x1="172.6" y1="75" x2="174.7" y2="176.7"/><line x1="172.6" y1="75" x2="202.4" y2="95.4"/><line x1="172.6" y1="75" x2="94.6" y2="147.7"/><line x1="172.6" y1="75" x2="-93.6" y2="118.7"/><line x1="172.6" y1="75" x2="59.7" y2="100.5"/><line x1="172.6" y1="75" x2="268.9" y2="79.1"/><line x1="172.6" y1="75" x2="73.2" y2="116.1"/><line x1="172.6" y1="75" x2="37.2" y2="28.4"/><line x1="172.6" y1="75" x2="141.3" y2="24.5"/><line x1="154.7" y1="102.2" x2="168.9" y2="134.1"/><line x1="154.7" y1="102.2" x2="174.7" y2="176.7"/><line x1="154.7" y1="102.2" x2="125.8" y2="89.9"/><line x1="154.7" y1="102.2" x2="-16.5" y2="157"/><line x1="154.7" y1="102.2" x2="202.4" y2="95.4"/><line x1="154.7" y1="102.2" x2="172.6" y2="75"/><line x1="154.7" y1="102.2" x2="-106.5" y2="171.6"/><line x1="154.7" y1="102.2" x2="94.6" y2="147.7"/><line x1="154.7" y1="102.2" x2="96.9" y2="217.2"/><line x1="154.7" y1="102.2" x2="59.7" y2="100.5"/><line x1="154.7" y1="102.2" x2="212" y2="45.4"/><line x1="154.7" y1="102.2" x2="268.9" y2="79.1"/><line x1="154.7" y1="102.2" x2="239.7" y2="142"/><line x1="154.7" y1="102.2" x2="-95.9" y2="-159.4"/><line x1="154.7" y1="102.2" x2="199.4" y2="179.2"/><line x1="154.7" y1="102.2" x2="259.4" y2="117"/><line x1="154.7" y1="102.2" x2="141.3" y2="24.5"/><line x1="154.7" y1="102.2" x2="49.6" y2="166.3"/><line x1="143" y1="55.1" x2="168.9" y2="134.1"/><line x1="143" y1="55.1" x2="161.6" y2="-50.6"/><line x1="143" y1="55.1" x2="-61.6" y2="131.9"/><line x1="143" y1="55.1" x2="125.8" y2="89.9"/><line x1="143" y1="55.1" x2="-210.3" y2="281.2"/><line x1="143" y1="55.1" x2="257.9" y2="24.3"/><line x1="143" y1="55.1" x2="202.4" y2="95.4"/><line x1="143" y1="55.1" x2="172.6" y2="75"/><line x1="143" y1="55.1" x2="154.7" y2="102.2"/><line x1="143" y1="55.1" x2="94.6" y2="147.7"/><line x1="143" y1="55.1" x2="268.9" y2="79.1"/><line x1="143" y1="55.1" x2="203.1" y2="19.3"/><line x1="143" y1="55.1" x2="239" y2="11.3"/><line x1="143" y1="55.1" x2="141.3" y2="24.5"/><line x1="103.9" y1="17.4" x2="168.9" y2="134.1"/><line x1="103.9" y1="17.4" x2="161.6" y2="-50.6"/><line x1="103.9" y1="17.4" x2="153.4" y2="-156.3"/><line x1="103.9" y1="17.4" x2="174.7" y2="176.7"/><line x1="103.9" y1="17.4" x2="-117.7" y2="300.2"/><line x1="103.9" y1="17.4" x2="125.8" y2="89.9"/><line x1="103.9" y1="17.4" x2="257.9" y2="24.3"/><line x1="103.9" y1="17.4" x2="116.7" y2="-98.3"/><line x1="103.9" y1="17.4" x2="202.4" y2="95.4"/><line x1="103.9" y1="17.4" x2="172.6" y2="75"/><line x1="103.9" y1="17.4" x2="154.7" y2="102.2"/><line x1="103.9" y1="17.4" x2="143" y2="55.1"/><line x1="103.9" y1="17.4" x2="94.6" y2="147.7"/><line x1="103.9" y1="17.4" x2="-47.6" y2="58.8"/><line x1="103.9" y1="17.4" x2="212" y2="45.4"/><line x1="103.9" y1="17.4" x2="-172.8" y2="334.5"/><line x1="103.9" y1="17.4" x2="203.1" y2="19.3"/><line x1="103.9" y1="17.4" x2="231.1" y2="-137.1"/><line x1="103.9" y1="17.4" x2="239" y2="11.3"/><line x1="103.9" y1="17.4" x2="174.9" y2="-178.4"/><line x1="103.9" y1="17.4" x2="109.1" y2="-59"/><line x1="103.9" y1="17.4" x2="30.5" y2="298.5"/><line x1="103.9" y1="17.4" x2="189" y2="-136.8"/><line x1="103.9" y1="17.4" x2="37.6" y2="-177"/><line x1="103.9" y1="17.4" x2="141.3" y2="24.5"/><line x1="74.9" y1="-75.4" x2="25.6" y2="-394.7"/><line x1="74.9" y1="-75.4" x2="63" y2="-256.8"/><line x1="74.9" y1="-75.4" x2="-5.3" y2="-235.7"/><line x1="74.9" y1="-75.4" x2="257.9" y2="24.3"/><line x1="74.9" y1="-75.4" x2="18.5" y2="-140.5"/><line x1="74.9" y1="-75.4" x2="202.4" y2="95.4"/><line x1="74.9" y1="-75.4" x2="154.7" y2="102.2"/><line x1="74.9" y1="-75.4" x2="143" y2="55.1"/><line x1="74.9" y1="-75.4" x2="35" y2="50.8"/><line x1="74.9" y1="-75.4" x2="-47.6" y2="58.8"/><line x1="74.9" y1="-75.4" x2="203.1" y2="19.3"/><line x1="74.9" y1="-75.4" x2="174.9" y2="-178.4"/><line x1="74.9" y1="-75.4" x2="189" y2="-136.8"/><line x1="74.9" y1="-75.4" x2="141.3" y2="24.5"/><line x1="232" y1="103" x2="172.6" y2="75"/><line x1="232" y1="103" x2="154.7" y2="102.2"/><line x1="232" y1="103" x2="143" y2="55.1"/><line x1="232" y1="103" x2="103.9" y2="17.4"/><line x1="232" y1="103" x2="94.6" y2="147.7"/><line x1="232" y1="103" x2="212" y2="45.4"/><line x1="232" y1="103" x2="203.1" y2="19.3"/><line x1="185.1" y1="-27.5" x2="125.8" y2="89.9"/><line x1="185.1" y1="-27.5" x2="318.3" y2="-99.7"/><line x1="185.1" y1="-27.5" x2="257.9" y2="24.3"/><line x1="185.1" y1="-27.5" x2="116.7" y2="-98.3"/><line x1="185.1" y1="-27.5" x2="18.5" y2="-140.5"/><line x1="185.1" y1="-27.5" x2="202.4" y2="95.4"/><line x1="185.1" y1="-27.5" x2="172.6" y2="75"/><line x1="185.1" y1="-27.5" x2="154.7" y2="102.2"/><line x1="185.1" y1="-27.5" x2="143" y2="55.1"/><line x1="185.1" y1="-27.5" x2="103.9" y2="17.4"/><line x1="185.1" y1="-27.5" x2="94.6" y2="147.7"/><line x1="185.1" y1="-27.5" x2="-5" y2="2.8"/><line x1="185.1" y1="-27.5" x2="268.9" y2="79.1"/><line x1="185.1" y1="-27.5" x2="203.1" y2="19.3"/><line x1="185.1" y1="-27.5" x2="231.1" y2="-137.1"/><line x1="185.1" y1="-27.5" x2="189" y2="-136.8"/><line x1="185.1" y1="-27.5" x2="37.6" y2="-177"/><line x1="185.1" y1="-27.5" x2="259.4" y2="117"/><line x1="185.1" y1="-27.5" x2="230.8" y2="-25.1"/><line x1="185.1" y1="-27.5" x2="49.6" y2="166.3"/><line x1="0.4" y1="-28.9" x2="219.9" y2="-181.9"/><line x1="0.4" y1="-28.9" x2="-61.6" y2="131.9"/><line x1="0.4" y1="-28.9" x2="34.1" y2="-1.2"/><line x1="0.4" y1="-28.9" x2="-233.5" y2="203.8"/><line x1="0.4" y1="-28.9" x2="-252.2" y2="174"/><line x1="0.4" y1="-28.9" x2="-198.6" y2="200.5"/><line x1="0.4" y1="-28.9" x2="42.8" y2="-311.5"/><line x1="0.4" y1="-28.9" x2="257.9" y2="24.3"/><line x1="0.4" y1="-28.9" x2="18.5" y2="-140.5"/><line x1="0.4" y1="-28.9" x2="-100" y2="33.9"/><line x1="0.4" y1="-28.9" x2="143" y2="55.1"/><line x1="0.4" y1="-28.9" x2="185.1" y2="-27.5"/><line x1="0.4" y1="-28.9" x2="97.8" y2="47.8"/><line x1="0.4" y1="-28.9" x2="112.4" y2="-15.4"/><line x1="0.4" y1="-28.9" x2="94.6" y2="147.7"/><line x1="0.4" y1="-28.9" x2="-93.6" y2="118.7"/><line x1="0.4" y1="-28.9" x2="-47.6" y2="58.8"/><line x1="0.4" y1="-28.9" x2="231.1" y2="-137.1"/><line x1="0.4" y1="-28.9" x2="174.9" y2="-178.4"/><line x1="0.4" y1="-28.9" x2="109.1" y2="-59"/><line x1="0.4" y1="-28.9" x2="73.2" y2="116.1"/><line x1="0.4" y1="-28.9" x2="-45.8" y2="-187.8"/><line x1="0.4" y1="-28.9" x2="189" y2="-136.8"/><line x1="0.4" y1="-28.9" x2="-58.2" y2="-228.2"/><line x1="0.4" y1="-28.9" x2="-263.3" y2="232.5"/><line x1="0.4" y1="-28.9" x2="37.6" y2="-177"/><line x1="0.4" y1="-28.9" x2="230.8" y2="-25.1"/><line x1="0.4" y1="-28.9" x2="141.3" y2="24.5"/><line x1="93.6" y1="87.9" x2="-210.3" y2="281.2"/><line x1="93.6" y1="87.9" x2="172.6" y2="75"/><line x1="93.6" y1="87.9" x2="143" y2="55.1"/><line x1="93.6" y1="87.9" x2="103.9" y2="17.4"/><line x1="93.6" y1="87.9" x2="-5" y2="2.8"/><line x1="93.6" y1="87.9" x2="109.1" y2="-59"/><line x1="93.6" y1="87.9" x2="211.5" y2="125.6"/><line x1="93.6" y1="87.9" x2="189" y2="-136.8"/><line x1="93.6" y1="87.9" x2="259.4" y2="117"/><line x1="93.6" y1="87.9" x2="141.3" y2="24.5"/><line x1="93.6" y1="87.9" x2="49.6" y2="166.3"/><line x1="127.1" y1="129.3" x2="-38.6" y2="175.2"/><line x1="127.1" y1="129.3" x2="172.6" y2="75"/><line x1="127.1" y1="129.3" x2="143" y2="55.1"/><line x1="127.1" y1="129.3" x2="185.1" y2="-27.5"/><line x1="127.1" y1="129.3" x2="93.6" y2="87.9"/><line x1="127.1" y1="129.3" x2="97.8" y2="47.8"/><line x1="127.1" y1="129.3" x2="112.4" y2="-15.4"/><line x1="127.1" y1="129.3" x2="94.6" y2="147.7"/><line x1="127.1" y1="129.3" x2="211.5" y2="125.6"/><line x1="127.1" y1="129.3" x2="5.2" y2="177.7"/><line x1="127.1" y1="129.3" x2="189" y2="-136.8"/><line x1="127.1" y1="129.3" x2="259.4" y2="117"/><line x1="127.1" y1="129.3" x2="49.6" y2="166.3"/><line x1="38.8" y1="-278.2" x2="-34.7" y2="-349.2"/><line x1="38.8" y1="-278.2" x2="63" y2="-256.8"/><line x1="38.8" y1="-278.2" x2="-41.6" y2="-313.3"/><line x1="38.8" y1="-278.2" x2="25.6" y2="-362.8"/><line x1="38.8" y1="-278.2" x2="-82.1" y2="-340.8"/><line x1="38.8" y1="-278.2" x2="-21.8" y2="-393.1"/><line x1="17.5" y1="134.8" x2="-61.6" y2="131.9"/><line x1="17.5" y1="134.8" x2="35" y2="50.8"/><line x1="17.5" y1="134.8" x2="94.6" y2="147.7"/><line x1="-106.5" y1="171.6" x2="-239.4" y2="21.3"/><line x1="-106.5" y1="171.6" x2="-93.6" y2="118.7"/><line x1="-106.5" y1="171.6" x2="-165.7" y2="173"/><line x1="-106.5" y1="171.6" x2="-172.8" y2="334.5"/><line x1="-106.5" y1="171.6" x2="68" y2="304.8"/><line x1="-106.5" y1="171.6" x2="7.5" y2="243.3"/><line x1="-106.5" y1="171.6" x2="-163.3" y2="133.9"/><line x1="-135.9" y1="115.3" x2="-239.4" y2="21.3"/><line x1="-135.9" y1="115.3" x2="125.8" y2="89.9"/><line x1="-135.9" y1="115.3" x2="-106.5" y2="171.6"/><line x1="-135.9" y1="115.3" x2="-93.6" y2="118.7"/><line x1="-135.9" y1="115.3" x2="-165.7" y2="173"/><line x1="-135.9" y1="115.3" x2="7.5" y2="243.3"/><line x1="-135.9" y1="115.3" x2="-163.3" y2="133.9"/><line x1="-41.6" y1="-313.3" x2="-144.8" y2="-389.4"/><line x1="-41.6" y1="-313.3" x2="25.6" y2="-362.8"/><line x1="-41.6" y1="-313.3" x2="-21.8" y2="-393.1"/><line x1="-165.4" y1="373.6" x2="-117.7" y2="300.2"/><line x1="-165.4" y1="373.6" x2="-229.4" y2="386.1"/><line x1="97.8" y1="47.8" x2="168.9" y2="134.1"/><line x1="97.8" y1="47.8" x2="161.6" y2="-50.6"/><line x1="97.8" y1="47.8" x2="125.8" y2="89.9"/><line x1="97.8" y1="47.8" x2="-130.1" y2="222.8"/><line x1="97.8" y1="47.8" x2="257.9" y2="24.3"/><line x1="97.8" y1="47.8" x2="116.7" y2="-98.3"/><line x1="97.8" y1="47.8" x2="202.4" y2="95.4"/><line x1="97.8" y1="47.8" x2="154.7" y2="102.2"/><line x1="97.8" y1="47.8" x2="143" y2="55.1"/><line x1="97.8" y1="47.8" x2="38.8" y2="-278.2"/><line x1="97.8" y1="47.8" x2="94.6" y2="147.7"/><line x1="97.8" y1="47.8" x2="96.9" y2="217.2"/><line x1="97.8" y1="47.8" x2="59.7" y2="100.5"/><line x1="97.8" y1="47.8" x2="179.4" y2="42.3"/><line x1="97.8" y1="47.8" x2="-79.9" y2="-200.9"/><line x1="97.8" y1="47.8" x2="268.9" y2="79.1"/><line x1="97.8" y1="47.8" x2="203.1" y2="19.3"/><line x1="97.8" y1="47.8" x2="231.1" y2="-137.1"/><line x1="97.8" y1="47.8" x2="239" y2="11.3"/><line x1="97.8" y1="47.8" x2="239.7" y2="142"/><line x1="97.8" y1="47.8" x2="189" y2="-136.8"/><line x1="97.8" y1="47.8" x2="49.6" y2="166.3"/><line x1="112.4" y1="-15.4" x2="161.6" y2="-50.6"/><line x1="112.4" y1="-15.4" x2="63" y2="-256.8"/><line x1="112.4" y1="-15.4" x2="125.8" y2="89.9"/><line x1="112.4" y1="-15.4" x2="-130.1" y2="222.8"/><line x1="112.4" y1="-15.4" x2="257.9" y2="24.3"/><line x1="112.4" y1="-15.4" x2="202.4" y2="95.4"/><line x1="112.4" y1="-15.4" x2="172.6" y2="75"/><line x1="112.4" y1="-15.4" x2="154.7" y2="102.2"/><line x1="112.4" y1="-15.4" x2="143" y2="55.1"/><line x1="112.4" y1="-15.4" x2="185.1" y2="-27.5"/><line x1="112.4" y1="-15.4" x2="97.8" y2="47.8"/><line x1="112.4" y1="-15.4" x2="59.7" y2="100.5"/><line x1="112.4" y1="-15.4" x2="179.4" y2="42.3"/><line x1="112.4" y1="-15.4" x2="212" y2="45.4"/><line x1="112.4" y1="-15.4" x2="203.1" y2="19.3"/><line x1="112.4" y1="-15.4" x2="189" y2="-136.8"/><line x1="112.4" y1="-15.4" x2="-41.1" y2="-276.2"/><line x1="112.4" y1="-15.4" x2="37.6" y2="-177"/><line x1="112.4" y1="-15.4" x2="230.8" y2="-25.1"/><line x1="-282.7" y1="321.4" x2="-233.5" y2="203.8"/><line x1="-282.7" y1="321.4" x2="-252.2" y2="174"/><line x1="-282.7" y1="321.4" x2="-198.6" y2="200.5"/><line x1="-282.7" y1="321.4" x2="-330.9" y2="262.5"/><line x1="-282.7" y1="321.4" x2="-210.3" y2="281.2"/><line x1="-282.7" y1="321.4" x2="-205.3" y2="406"/><line x1="-282.7" y1="321.4" x2="-172.8" y2="334.5"/><line x1="-282.7" y1="321.4" x2="-273.2" y2="411.7"/><line x1="-282.7" y1="321.4" x2="-102.9" y2="422.5"/><line x1="-282.7" y1="321.4" x2="-263.3" y2="232.5"/><line x1="35" y1="50.8" x2="-61.6" y2="131.9"/><line x1="-285.7" y1="-157.5" x2="-169.6" y2="-154"/><line x1="-86.2" y1="-387.2" x2="-34.7" y2="-349.2"/><line x1="-86.2" y1="-387.2" x2="-45.5" y2="-446.7"/><line x1="-86.2" y1="-387.2" x2="-138.8" y2="-309.8"/><line x1="-86.2" y1="-387.2" x2="-95.9" y2="-159.4"/><line x1="-86.2" y1="-387.2" x2="60.5" y2="-420.4"/><line x1="96.9" y1="217.2" x2="94.6" y2="147.7"/><line x1="-93.6" y1="118.7" x2="94.6" y2="147.7"/><line x1="-166" y1="89.9" x2="-100" y2="33.9"/><line x1="-166" y1="89.9" x2="-106.5" y2="171.6"/><line x1="163.1" y1="-224.4" x2="-34.7" y2="-349.2"/><line x1="-143.8" y1="-256.1" x2="-185.2" y2="-305.3"/><line x1="-143.8" y1="-256.1" x2="-145.8" y2="-340.5"/><line x1="-143.8" y1="-256.1" x2="-144.8" y2="-389.4"/><line x1="367.6" y1="-166.4" x2="227.2" y2="-238.8"/><line x1="-144.8" y1="-389.4" x2="-185.2" y2="-305.3"/><line x1="-144.8" y1="-389.4" x2="-21.8" y2="-393.1"/><line x1="-5" y1="2.8" x2="168.9" y2="134.1"/><line x1="-5" y1="2.8" x2="-44.6" y2="90.4"/><line x1="-5" y1="2.8" x2="-61.6" y2="131.9"/><line x1="-5" y1="2.8" x2="-16.5" y2="157"/><line x1="54.7" y1="343.8" x2="30.5" y2="298.5"/><line x1="-201.2" y1="245.7" x2="-211.5" y2="313.6"/><line x1="-201.2" y1="245.7" x2="-245.7" y2="330.4"/><line x1="-201.2" y1="245.7" x2="-233.5" y2="203.8"/><line x1="-201.2" y1="245.7" x2="-252.2" y2="174"/><line x1="-201.2" y1="245.7" x2="-38.6" y2="175.2"/><line x1="-201.2" y1="245.7" x2="-330.9" y2="262.5"/><line x1="-201.2" y1="245.7" x2="-130.1" y2="222.8"/><line x1="-201.2" y1="245.7" x2="-167.4" y2="254.8"/><line x1="-201.2" y1="245.7" x2="-74.2" y2="205.1"/><line x1="-201.2" y1="245.7" x2="49.6" y2="166.3"/><line x1="-47.6" y1="58.8" x2="-61.6" y2="131.9"/><line x1="-47.6" y1="58.8" x2="54.2" y2="236.2"/><line x1="121.6" y1="-189.3" x2="168" y2="-309.1"/><line x1="121.6" y1="-189.3" x2="63" y2="-256.8"/><line x1="121.6" y1="-189.3" x2="20.4" y2="-263.2"/><line x1="121.6" y1="-189.3" x2="116.7" y2="-371.2"/><line x1="121.6" y1="-189.3" x2="-136" y2="80"/><line x1="121.6" y1="-189.3" x2="163.1" y2="-224.4"/><line x1="121.6" y1="-189.3" x2="-47.6" y2="58.8"/><line x1="121.6" y1="-189.3" x2="212" y2="45.4"/><line x1="121.6" y1="-189.3" x2="231.1" y2="-137.1"/><line x1="121.6" y1="-189.3" x2="227.2" y2="-238.8"/><line x1="-38.3" y1="311" x2="-211.5" y2="313.6"/><line x1="-38.3" y1="311" x2="96.9" y2="217.2"/><line x1="-38.3" y1="311" x2="54.7" y2="343.8"/><line x1="161.8" y1="10.8" x2="151.9" y2="-118.7"/><line x1="161.8" y1="10.8" x2="-38.6" y2="175.2"/><line x1="161.8" y1="10.8" x2="211.7" y2="-75"/><line x1="161.8" y1="10.8" x2="232" y2="103"/><line x1="161.8" y1="10.8" x2="185.1" y2="-27.5"/><line x1="161.8" y1="10.8" x2="0.4" y2="-28.9"/><line x1="161.8" y1="10.8" x2="94.6" y2="147.7"/><line x1="161.8" y1="10.8" x2="163.1" y2="-224.4"/><line x1="161.8" y1="10.8" x2="203.1" y2="19.3"/><line x1="161.8" y1="10.8" x2="261.2" y2="172.1"/><line x1="-57.1" y1="242.2" x2="-136" y2="80"/><line x1="212" y1="45.4" x2="96.9" y2="217.2"/><line x1="212" y1="45.4" x2="261.2" y2="172.1"/><line x1="212" y1="45.4" x2="141.3" y2="24.5"/><line x1="-82.1" y1="-340.8" x2="-34.7" y2="-349.2"/><line x1="-82.1" y1="-340.8" x2="-41.6" y2="-313.3"/><line x1="-82.1" y1="-340.8" x2="-21.8" y2="-393.1"/><line x1="-165.7" y1="173" x2="-249.7" y2="84.7"/><line x1="-165.7" y1="173" x2="-284.5" y2="167.8"/><line x1="-165.7" y1="173" x2="-61.9" y2="303.7"/><line x1="-165.7" y1="173" x2="59.7" y2="100.5"/><line x1="-79.9" y1="-200.9" x2="-34.7" y2="-349.2"/><line x1="-79.9" y1="-200.9" x2="25.6" y2="-394.7"/><line x1="-79.9" y1="-200.9" x2="20.4" y2="-263.2"/><line x1="-79.9" y1="-200.9" x2="116.7" y2="-98.3"/><line x1="-79.9" y1="-200.9" x2="-41.6" y2="-313.3"/><line x1="-79.9" y1="-200.9" x2="-143.8" y2="-256.1"/><line x1="-79.9" y1="-200.9" x2="90.8" y2="-97.1"/><line x1="-79.9" y1="-200.9" x2="-200.4" y2="-153.5"/><line x1="-79.9" y1="-200.9" x2="-95.9" y2="-159.4"/><line x1="-79.9" y1="-200.9" x2="-15.1" y2="-198.4"/><line x1="-79.9" y1="-200.9" x2="-58.2" y2="-228.2"/><line x1="132" y1="-70.4" x2="185.1" y2="-27.5"/><line x1="132" y1="-70.4" x2="-5" y2="2.8"/><line x1="132" y1="-70.4" x2="189" y2="-136.8"/><line x1="79.8" y1="-42.6" x2="-44.6" y2="90.4"/><line x1="79.8" y1="-42.6" x2="185.1" y2="-27.5"/><line x1="79.8" y1="-42.6" x2="-5" y2="2.8"/><line x1="79.8" y1="-42.6" x2="132" y2="-70.4"/><line x1="79.8" y1="-42.6" x2="189" y2="-136.8"/><line x1="-109.3" y1="-310.7" x2="-34.7" y2="-349.2"/><line x1="-109.3" y1="-310.7" x2="-185.2" y2="-305.3"/><line x1="-109.3" y1="-310.7" x2="-41.6" y2="-313.3"/><line x1="-109.3" y1="-310.7" x2="-82.1" y2="-340.8"/><line x1="-109.3" y1="-310.7" x2="-21.8" y2="-393.1"/><line x1="-85" y1="395" x2="-165.5" y2="299.1"/><line x1="-85" y1="395" x2="-10.4" y2="448.8"/><line x1="-229.4" y1="386.1" x2="-117.7" y2="300.2"/><line x1="-229.4" y1="386.1" x2="-85" y2="395"/><line x1="-229.4" y1="386.1" x2="-95.5" y2="334.5"/><line x1="-193.9" y1="453.4" x2="-85" y2="395"/><line x1="-193.9" y1="453.4" x2="-229.4" y2="386.1"/><line x1="-172.8" y1="334.5" x2="-211.5" y2="313.6"/><line x1="-172.8" y1="334.5" x2="-229.4" y2="386.1"/><line x1="-172.8" y1="334.5" x2="-193.9" y2="453.4"/><line x1="-172.8" y1="334.5" x2="-95.5" y2="334.5"/><line x1="218" y1="245.1" x2="96.9" y2="217.2"/><line x1="218" y1="245.1" x2="54.7" y2="343.8"/><line x1="218" y1="245.1" x2="212" y2="45.4"/><line x1="218" y1="245.1" x2="239.7" y2="142"/><line x1="218" y1="245.1" x2="261.2" y2="172.1"/><line x1="-273.2" y1="411.7" x2="-211.5" y2="313.6"/><line x1="-273.2" y1="411.7" x2="-229.4" y2="386.1"/><line x1="-273.2" y1="411.7" x2="-193.9" y2="453.4"/><line x1="268.9" y1="79.1" x2="125.8" y2="89.9"/><line x1="268.9" y1="79.1" x2="202.4" y2="95.4"/><line x1="268.9" y1="79.1" x2="59.7" y2="100.5"/><line x1="203.1" y1="19.3" x2="161.6" y2="-50.6"/><line x1="203.1" y1="19.3" x2="174.7" y2="176.7"/><line x1="203.1" y1="19.3" x2="125.8" y2="89.9"/><line x1="203.1" y1="19.3" x2="202.4" y2="95.4"/><line x1="203.1" y1="19.3" x2="172.6" y2="75"/><line x1="203.1" y1="19.3" x2="154.7" y2="102.2"/><line x1="203.1" y1="19.3" x2="94.6" y2="147.7"/><line x1="203.1" y1="19.3" x2="96.9" y2="217.2"/><line x1="203.1" y1="19.3" x2="-93.6" y2="118.7"/><line x1="203.1" y1="19.3" x2="59.7" y2="100.5"/><line x1="203.1" y1="19.3" x2="90.8" y2="-97.1"/><line x1="203.1" y1="19.3" x2="268.9" y2="79.1"/><line x1="203.1" y1="19.3" x2="231.1" y2="-137.1"/><line x1="203.1" y1="19.3" x2="239.7" y2="142"/><line x1="203.1" y1="19.3" x2="211.5" y2="125.6"/><line x1="203.1" y1="19.3" x2="259.4" y2="117"/><line x1="203.1" y1="19.3" x2="141.3" y2="24.5"/><line x1="203.1" y1="19.3" x2="49.6" y2="166.3"/><line x1="-295.1" y1="-87.3" x2="-239.4" y2="21.3"/><line x1="-295.1" y1="-87.3" x2="-285.7" y2="-157.5"/><line x1="-295.1" y1="-87.3" x2="-200.4" y2="-153.5"/><line x1="231.1" y1="-137.1" x2="25.6" y2="-394.7"/><line x1="231.1" y1="-137.1" x2="116.7" y2="-371.2"/><line x1="231.1" y1="-137.1" x2="202.4" y2="95.4"/><line x1="231.1" y1="-137.1" x2="94.6" y2="147.7"/><line x1="231.1" y1="-137.1" x2="59.7" y2="100.5"/><line x1="231.1" y1="-137.1" x2="163.1" y2="-224.4"/><line x1="231.1" y1="-137.1" x2="235" y2="74.1"/><line x1="231.1" y1="-137.1" x2="227.2" y2="-238.8"/><line x1="231.1" y1="-137.1" x2="-15.1" y2="-198.4"/><line x1="231.1" y1="-137.1" x2="-21.8" y2="-393.1"/><line x1="239" y1="11.3" x2="202.4" y2="95.4"/><line x1="239" y1="11.3" x2="172.6" y2="75"/><line x1="239" y1="11.3" x2="154.7" y2="102.2"/><line x1="239" y1="11.3" x2="59.7" y2="100.5"/><line x1="239" y1="11.3" x2="268.9" y2="79.1"/><line x1="239" y1="11.3" x2="231.1" y2="-137.1"/><line x1="174.9" y1="-178.4" x2="42.8" y2="-311.5"/><line x1="174.9" y1="-178.4" x2="20.4" y2="-263.2"/><line x1="174.9" y1="-178.4" x2="231.1" y2="-137.1"/><line x1="174.9" y1="-178.4" x2="37.6" y2="-177"/><line x1="109.1" y1="-59" x2="153.4" y2="-156.3"/><line x1="109.1" y1="-59" x2="143" y2="55.1"/><line x1="109.1" y1="-59" x2="167.7" y2="-86.6"/><line x1="109.1" y1="-59" x2="227.2" y2="-238.8"/><line x1="109.1" y1="-59" x2="189" y2="-136.8"/><line x1="54.2" y1="236.2" x2="59.7" y2="100.5"/><line x1="-200.4" y1="-153.5" x2="-239.4" y2="21.3"/><line x1="-200.4" y1="-153.5" x2="-285.7" y2="-157.5"/><line x1="-102.9" y1="422.5" x2="-85" y2="395"/><line x1="-102.9" y1="422.5" x2="8.7" y2="362.6"/><line x1="-102.9" y1="422.5" x2="-10.4" y2="448.8"/><line x1="30.5" y1="298.5" x2="-61.6" y2="131.9"/><line x1="30.5" y1="298.5" x2="-61.9" y2="303.7"/><line x1="30.5" y1="298.5" x2="235" y2="74.1"/><line x1="30.5" y1="298.5" x2="-85" y2="395"/><line x1="30.5" y1="298.5" x2="54.2" y2="236.2"/><line x1="30.5" y1="298.5" x2="8.7" y2="362.6"/><line x1="30.5" y1="298.5" x2="-102.9" y2="422.5"/><line x1="30.5" y1="298.5" x2="68" y2="304.8"/><line x1="30.5" y1="298.5" x2="88.4" y2="366.3"/><line x1="278.8" y1="-160.4" x2="330.6" y2="-171.1"/><line x1="278.8" y1="-160.4" x2="151.9" y2="-118.7"/><line x1="278.8" y1="-160.4" x2="219.9" y2="-181.9"/><line x1="278.8" y1="-160.4" x2="346.3" y2="-196.6"/><line x1="278.8" y1="-160.4" x2="20.4" y2="-263.2"/><line x1="278.8" y1="-160.4" x2="318.3" y2="-99.7"/><line x1="278.8" y1="-160.4" x2="103.9" y2="17.4"/><line x1="278.8" y1="-160.4" x2="367.6" y2="-166.4"/><line x1="278.8" y1="-160.4" x2="231.1" y2="-137.1"/><line x1="278.8" y1="-160.4" x2="174.9" y2="-178.4"/><line x1="278.8" y1="-160.4" x2="189" y2="-136.8"/><line x1="278.8" y1="-160.4" x2="251.5" y2="-194.4"/><line x1="73.2" y1="116.1" x2="17.5" y2="134.8"/><line x1="73.2" y1="116.1" x2="35" y2="50.8"/><line x1="73.2" y1="116.1" x2="96.9" y2="217.2"/><line x1="-45.8" y1="-187.8" x2="-34.7" y2="-349.2"/><line x1="-45.8" y1="-187.8" x2="20.4" y2="-263.2"/><line x1="-45.8" y1="-187.8" x2="-79.9" y2="-200.9"/><line x1="-45.8" y1="-187.8" x2="-15.1" y2="-198.4"/><line x1="211.5" y1="125.6" x2="141.3" y2="24.5"/><line x1="261.2" y1="172.1" x2="35" y2="50.8"/><line x1="5.2" y1="177.7" x2="-233.5" y2="203.8"/><line x1="5.2" y1="177.7" x2="-130.1" y2="222.8"/><line x1="5.2" y1="177.7" x2="93.6" y2="87.9"/><line x1="5.2" y1="177.7" x2="97.8" y2="47.8"/><line x1="5.2" y1="177.7" x2="94.6" y2="147.7"/><line x1="5.2" y1="177.7" x2="49.6" y2="166.3"/><line x1="68" y1="304.8" x2="88.4" y2="366.3"/><line x1="-95.9" y1="-159.4" x2="-34.7" y2="-349.2"/><line x1="-95.9" y1="-159.4" x2="-239.4" y2="21.3"/><line x1="-95.9" y1="-159.4" x2="-200.4" y2="-153.5"/><line x1="90.5" y1="-172.4" x2="-5.3" y2="-235.7"/><line x1="90.5" y1="-172.4" x2="103.9" y2="17.4"/><line x1="90.5" y1="-172.4" x2="185.1" y2="-27.5"/><line x1="90.5" y1="-172.4" x2="-58.2" y2="-228.2"/><line x1="90.5" y1="-172.4" x2="195.1" y2="-270.8"/><line x1="90.5" y1="-172.4" x2="133.7" y2="-252.3"/><line x1="69.3" y1="-146.2" x2="-5.3" y2="-235.7"/><line x1="69.3" y1="-146.2" x2="103.9" y2="17.4"/><line x1="69.3" y1="-146.2" x2="185.1" y2="-27.5"/><line x1="69.3" y1="-146.2" x2="90.5" y2="-172.4"/><line x1="69.3" y1="-146.2" x2="-58.2" y2="-228.2"/><line x1="69.3" y1="-146.2" x2="195.1" y2="-270.8"/><line x1="227.2" y1="-238.8" x2="272.1" y2="-32.5"/><line x1="227.2" y1="-238.8" x2="212" y2="45.4"/><line x1="227.2" y1="-238.8" x2="60.5" y2="-420.4"/><line x1="69.7" y1="-467.6" x2="25.6" y2="-394.7"/><line x1="69.7" y1="-467.6" x2="-80.1" y2="-432.4"/><line x1="69.7" y1="-467.6" x2="116.7" y2="-371.2"/><line x1="69.7" y1="-467.6" x2="60.5" y2="-420.4"/><line x1="69.7" y1="-467.6" x2="61.3" y2="-363.7"/><line x1="117.9" y1="-399.3" x2="-34.7" y2="-349.2"/><line x1="117.9" y1="-399.3" x2="227.2" y2="-238.8"/><line x1="117.9" y1="-399.3" x2="69.7" y2="-467.6"/><line x1="117.9" y1="-399.3" x2="61.3" y2="-363.7"/><line x1="189" y1="-136.8" x2="63" y2="-256.8"/><line x1="189" y1="-136.8" x2="116.7" y2="-98.3"/><line x1="189" y1="-136.8" x2="172.6" y2="75"/><line x1="189" y1="-136.8" x2="143" y2="55.1"/><line x1="189" y1="-136.8" x2="-41.6" y2="-313.3"/><line x1="189" y1="-136.8" x2="94.6" y2="147.7"/><line x1="189" y1="-136.8" x2="367.6" y2="-166.4"/><line x1="189" y1="-136.8" x2="231.1" y2="-137.1"/><line x1="189" y1="-136.8" x2="174.9" y2="-178.4"/><line x1="189" y1="-136.8" x2="227.2" y2="-238.8"/><line x1="189" y1="-136.8" x2="-15.1" y2="-198.4"/><line x1="189" y1="-136.8" x2="-91.7" y2="-260.1"/><line x1="189" y1="-136.8" x2="251.5" y2="-194.4"/><line x1="189" y1="-136.8" x2="295.8" y2="-215.1"/><line x1="189" y1="-136.8" x2="61.3" y2="-363.7"/><line x1="189" y1="-136.8" x2="37.6" y2="-177"/><line x1="88.4" y1="366.3" x2="54.2" y2="236.2"/><line x1="88.4" y1="366.3" x2="-10.4" y2="448.8"/><line x1="-15.1" y1="-198.4" x2="-34.7" y2="-349.2"/><line x1="-15.1" y1="-198.4" x2="-143.8" y2="-256.1"/><line x1="-15.1" y1="-198.4" x2="-109.3" y2="-310.7"/><line x1="-15.1" y1="-198.4" x2="7.5" y2="243.3"/><line x1="-58.2" y1="-228.2" x2="161.6" y2="-50.6"/><line x1="-58.2" y1="-228.2" x2="-34.7" y2="-349.2"/><line x1="-58.2" y1="-228.2" x2="-185.2" y2="-305.3"/><line x1="-58.2" y1="-228.2" x2="-145.8" y2="-340.5"/><line x1="-58.2" y1="-228.2" x2="-5.3" y2="-235.7"/><line x1="-58.2" y1="-228.2" x2="-169.6" y2="-154"/><line x1="-58.2" y1="-228.2" x2="-138.8" y2="-309.8"/><line x1="-58.2" y1="-228.2" x2="-143.8" y2="-256.1"/><line x1="-58.2" y1="-228.2" x2="-109.3" y2="-310.7"/><line x1="-58.2" y1="-228.2" x2="-0.5" y2="-321.7"/><line x1="-58.2" y1="-228.2" x2="-15.1" y2="-198.4"/><line x1="-91.7" y1="-260.1" x2="-34.7" y2="-349.2"/><line x1="-91.7" y1="-260.1" x2="-185.2" y2="-305.3"/><line x1="-91.7" y1="-260.1" x2="-145.8" y2="-340.5"/><line x1="-91.7" y1="-260.1" x2="-5.3" y2="-235.7"/><line x1="-91.7" y1="-260.1" x2="20.4" y2="-263.2"/><line x1="-91.7" y1="-260.1" x2="38.8" y2="-278.2"/><line x1="-91.7" y1="-260.1" x2="-41.6" y2="-313.3"/><line x1="-91.7" y1="-260.1" x2="-169.6" y2="-154"/><line x1="-91.7" y1="-260.1" x2="-86.2" y2="-387.2"/><line x1="-91.7" y1="-260.1" x2="-138.8" y2="-309.8"/><line x1="-91.7" y1="-260.1" x2="-5" y2="2.8"/><line x1="-91.7" y1="-260.1" x2="-82.1" y2="-340.8"/><line x1="-91.7" y1="-260.1" x2="-109.3" y2="-310.7"/><line x1="-91.7" y1="-260.1" x2="-45.8" y2="-187.8"/><line x1="-91.7" y1="-260.1" x2="-15.1" y2="-198.4"/><line x1="-41.1" y1="-276.2" x2="-45.5" y2="-446.7"/><line x1="-41.1" y1="-276.2" x2="20.4" y2="-263.2"/><line x1="-41.1" y1="-276.2" x2="-138.8" y2="-309.8"/><line x1="-41.1" y1="-276.2" x2="-0.5" y2="-321.7"/><line x1="-41.1" y1="-276.2" x2="-15.1" y2="-198.4"/><line x1="-41.1" y1="-276.2" x2="-91.7" y2="-260.1"/><line x1="-21.8" y1="-393.1" x2="25.6" y2="-362.8"/><line x1="-21.8" y1="-393.1" x2="-1.8" y2="-350.7"/><line x1="-263.3" y1="232.5" x2="-233.5" y2="203.8"/><line x1="-263.3" y1="232.5" x2="-252.2" y2="174"/><line x1="-263.3" y1="232.5" x2="-198.6" y2="200.5"/><line x1="-263.3" y1="232.5" x2="-330.9" y2="262.5"/><line x1="-263.3" y1="232.5" x2="-210.3" y2="281.2"/><line x1="-263.3" y1="232.5" x2="-81.7" y2="262.8"/><line x1="-263.3" y1="232.5" x2="-229.4" y2="386.1"/><line x1="-263.3" y1="232.5" x2="-172.8" y2="334.5"/><line x1="-287.6" y1="263.9" x2="-211.5" y2="313.6"/><line x1="-287.6" y1="263.9" x2="-233.5" y2="203.8"/><line x1="-287.6" y1="263.9" x2="-252.2" y2="174"/><line x1="-287.6" y1="263.9" x2="-198.6" y2="200.5"/><line x1="-287.6" y1="263.9" x2="-330.9" y2="262.5"/><line x1="-287.6" y1="263.9" x2="-210.3" y2="281.2"/><line x1="-287.6" y1="263.9" x2="-130.1" y2="222.8"/><line x1="-287.6" y1="263.9" x2="-81.7" y2="262.8"/><line x1="-287.6" y1="263.9" x2="-167.4" y2="254.8"/><line x1="-287.6" y1="263.9" x2="-229.4" y2="386.1"/><line x1="-287.6" y1="263.9" x2="-263.3" y2="232.5"/><line x1="-95.5" y1="334.5" x2="94.6" y2="147.7"/><line x1="195.1" y1="-270.8" x2="111.2" y2="-333.5"/><line x1="195.1" y1="-270.8" x2="121.6" y2="-189.3"/><line x1="195.1" y1="-270.8" x2="231.1" y2="-137.1"/><line x1="195.1" y1="-270.8" x2="227.2" y2="-238.8"/><line x1="90.8" y1="-224.4" x2="111.2" y2="-333.5"/><line x1="90.8" y1="-224.4" x2="25.6" y2="-394.7"/><line x1="90.8" y1="-224.4" x2="63" y2="-256.8"/><line x1="90.8" y1="-224.4" x2="20.4" y2="-263.2"/><line x1="90.8" y1="-224.4" x2="103.9" y2="17.4"/><line x1="90.8" y1="-224.4" x2="38.8" y2="-278.2"/><line x1="90.8" y1="-224.4" x2="121.6" y2="-189.3"/><line x1="90.8" y1="-224.4" x2="25.6" y2="-362.8"/><line x1="90.8" y1="-224.4" x2="212" y2="45.4"/><line x1="90.8" y1="-224.4" x2="203.1" y2="19.3"/><line x1="90.8" y1="-224.4" x2="227.2" y2="-238.8"/><line x1="90.8" y1="-224.4" x2="-21.8" y2="-393.1"/><line x1="90.8" y1="-224.4" x2="133.7" y2="-252.3"/><line x1="90.8" y1="-224.4" x2="-19.4" y2="-52.1"/><line x1="76" y1="-302.2" x2="-41.1" y2="-276.2"/><line x1="76" y1="-302.2" x2="90.8" y2="-224.4"/><line x1="76" y1="-302.2" x2="133.7" y2="-252.3"/><line x1="207" y1="-328.4" x2="195.1" y2="-270.8"/><line x1="207" y1="-328.4" x2="133.7" y2="-252.3"/><line x1="199.4" y1="179.2" x2="94.6" y2="147.7"/><line x1="133.7" y1="-252.3" x2="288.2" y2="-240.3"/><line x1="133.7" y1="-252.3" x2="111.2" y2="-333.5"/><line x1="133.7" y1="-252.3" x2="-100" y2="33.9"/><line x1="133.7" y1="-252.3" x2="38.8" y2="-278.2"/><line x1="133.7" y1="-252.3" x2="189" y2="-136.8"/><line x1="133.7" y1="-252.3" x2="37.6" y2="-177"/><line x1="-19.4" y1="-52.1" x2="-61.6" y2="131.9"/><line x1="7.5" y1="243.3" x2="94.6" y2="147.7"/><line x1="7.5" y1="243.3" x2="-61.9" y2="303.7"/><line x1="7.5" y1="243.3" x2="-85" y2="395"/><line x1="7.5" y1="243.3" x2="-102.9" y2="422.5"/><line x1="7.5" y1="243.3" x2="88.4" y2="366.3"/><line x1="251.5" y1="-194.4" x2="231.1" y2="-137.1"/><line x1="251.5" y1="-194.4" x2="239" y2="11.3"/><line x1="251.5" y1="-194.4" x2="-58.2" y2="-228.2"/><line x1="295.8" y1="-215.1" x2="38.8" y2="-278.2"/><line x1="295.8" y1="-215.1" x2="367.6" y2="-166.4"/><line x1="295.8" y1="-215.1" x2="231.1" y2="-137.1"/><line x1="295.8" y1="-215.1" x2="174.9" y2="-178.4"/><line x1="295.8" y1="-215.1" x2="251.5" y2="-194.4"/><line x1="60.5" y1="-420.4" x2="-34.7" y2="-349.2"/><line x1="60.5" y1="-420.4" x2="-41.6" y2="-313.3"/><line x1="60.5" y1="-420.4" x2="-21.8" y2="-393.1"/><line x1="61.3" y1="-363.7" x2="-34.7" y2="-349.2"/><line x1="61.3" y1="-363.7" x2="25.6" y2="-394.7"/><line x1="61.3" y1="-363.7" x2="0.7" y2="-435.4"/><line x1="61.3" y1="-363.7" x2="-80.1" y2="-432.4"/><line x1="61.3" y1="-363.7" x2="-200.4" y2="-153.5"/><line x1="61.3" y1="-363.7" x2="227.2" y2="-238.8"/><line x1="37.6" y1="-177" x2="63" y2="-256.8"/><line x1="37.6" y1="-177" x2="116.7" y2="-98.3"/><line x1="37.6" y1="-177" x2="38.8" y2="-278.2"/><line x1="37.6" y1="-177" x2="-5" y2="2.8"/><line x1="37.6" y1="-177" x2="-82.1" y2="-340.8"/><line x1="37.6" y1="-177" x2="-109.3" y2="-310.7"/><line x1="37.6" y1="-177" x2="-45.8" y2="-187.8"/><line x1="37.6" y1="-177" x2="-15.1" y2="-198.4"/><line x1="37.6" y1="-177" x2="-58.2" y2="-228.2"/><line x1="259.4" y1="117" x2="94.6" y2="147.7"/><line x1="259.4" y1="117" x2="211.5" y2="125.6"/><line x1="259.4" y1="117" x2="261.2" y2="172.1"/><line x1="259.4" y1="117" x2="7.5" y2="243.3"/><line x1="259.4" y1="117" x2="141.3" y2="24.5"/><line x1="230.8" y1="-25.1" x2="161.6" y2="-50.6"/><line x1="230.8" y1="-25.1" x2="318.3" y2="-99.7"/><line x1="230.8" y1="-25.1" x2="-81.7" y2="262.8"/><line x1="230.8" y1="-25.1" x2="257.9" y2="24.3"/><line x1="230.8" y1="-25.1" x2="202.4" y2="95.4"/><line x1="230.8" y1="-25.1" x2="172.6" y2="75"/><line x1="230.8" y1="-25.1" x2="154.7" y2="102.2"/><line x1="230.8" y1="-25.1" x2="143" y2="55.1"/><line x1="230.8" y1="-25.1" x2="103.9" y2="17.4"/><line x1="230.8" y1="-25.1" x2="94.6" y2="147.7"/><line x1="230.8" y1="-25.1" x2="367.6" y2="-166.4"/><line x1="230.8" y1="-25.1" x2="203.1" y2="19.3"/><line x1="230.8" y1="-25.1" x2="174.9" y2="-178.4"/><line x1="230.8" y1="-25.1" x2="109.1" y2="-59"/><line x1="230.8" y1="-25.1" x2="189" y2="-136.8"/><line x1="-237.6" y1="-177.6" x2="-169.6" y2="-154"/><line x1="141.3" y1="24.5" x2="272.1" y2="-32.5"/><line x1="49.6" y1="166.3" x2="94.1" y2="195.6"/><line x1="49.6" y1="166.3" x2="94.6" y2="147.7"/><line x1="49.6" y1="166.3" x2="59.7" y2="100.5"/><line x1="49.6" y1="166.3" x2="-38.3" y2="311"/><line x1="-163.3" y1="133.9" x2="-61.6" y2="131.9"/></g><g class="dots"><circle cx="-258.8" cy="273" r="3" fill="#009E73"/><circle cx="-95.7" cy="-17.8" r="3" fill="#009E73"/><circle cx="144.3" cy="234.8" r="3" fill="#0072B2"/><circle cx="-170.1" cy="7.5" r="3" fill="#0072B2"/><circle cx="-166" cy="89.9" r="3" fill="#0072B2"/><circle cx="-201.2" cy="245.7" r="3" fill="#009E73"/><circle cx="161.8" cy="10.8" r="3" fill="#0072B2"/><circle cx="79.8" cy="-42.6" r="3" fill="#0072B2"/><circle cx="218" cy="245.1" r="3" fill="#0072B2"/><circle cx="-295.1" cy="-87.3" r="3" fill="#0072B2"/><circle cx="278.8" cy="-160.4" r="3" fill="#009E73"/><circle cx="69.3" cy="-146.2" r="3" fill="#009E73"/><circle cx="117.9" cy="-399.3" r="3" fill="#0072B2"/><circle cx="76" cy="-302.2" r="3" fill="#009E73"/><circle cx="207" cy="-328.4" r="3" fill="#0072B2"/><circle cx="-237.6" cy="-177.6" r="3" fill="#0072B2"/><circle cx="-224.7" cy="120.4" r="4.6" fill="#009E73"/><circle cx="-155.9" cy="218.8" r="4.6" fill="#0072B2"/><circle cx="346.3" cy="-196.6" r="4.6" fill="#009E73"/><circle cx="168" cy="-309.1" r="4.6" fill="#0072B2"/><circle cx="34.1" cy="-1.2" r="4.6" fill="#0072B2"/><circle cx="74.9" cy="-75.4" r="4.6" fill="#0072B2"/><circle cx="232" cy="103" r="4.6" fill="#0072B2"/><circle cx="0.4" cy="-28.9" r="4.6" fill="#009E73"/><circle cx="17.5" cy="134.8" r="4.6" fill="#0072B2"/><circle cx="-282.7" cy="321.4" r="4.6" fill="#009E73"/><circle cx="167.7" cy="-86.6" r="4.6" fill="#0072B2"/><circle cx="132" cy="-70.4" r="4.6" fill="#009E73"/><circle cx="5.2" cy="177.7" r="4.6" fill="#0072B2"/><circle cx="90.5" cy="-172.4" r="4.6" fill="#009E73"/><circle cx="90.8" cy="-224.4" r="4.6" fill="#009E73"/><circle cx="-19.4" cy="-52.1" r="4.6" fill="#0072B2"/><circle cx="288.2" cy="-240.3" r="5.3" fill="#E69F00"/><circle cx="151.9" cy="-118.7" r="5.3" fill="#0072B2"/><circle cx="153.4" cy="-156.3" r="5.3" fill="#009E73"/><circle cx="324.6" cy="-123.9" r="5.3" fill="#009E73"/><circle cx="-284.5" cy="167.8" r="5.3" fill="#0072B2"/><circle cx="-200.5" cy="164.6" r="5.3" fill="#0072B2"/><circle cx="0.7" cy="-435.4" r="5.3" fill="#0072B2"/><circle cx="-80.1" cy="-432.4" r="5.3" fill="#0072B2"/><circle cx="211.7" cy="-75" r="5.3" fill="#0072B2"/><circle cx="-74.2" cy="205.1" r="5.3" fill="#0072B2"/><circle cx="127.1" cy="129.3" r="5.3" fill="#0072B2"/><circle cx="-285.7" cy="-157.5" r="5.3" fill="#0072B2"/><circle cx="-79.9" cy="-200.9" r="5.3" fill="#0072B2"/><circle cx="73.2" cy="116.1" r="5.3" fill="#0072B2"/><circle cx="69.7" cy="-467.6" r="5.3" fill="#0072B2"/><circle cx="-41.1" cy="-276.2" r="5.3" fill="#0072B2"/><circle cx="-287.6" cy="263.9" r="5.3" fill="#0072B2"/><circle cx="199.4" cy="179.2" r="5.3" fill="#0072B2"/><circle cx="-163.3" cy="133.9" r="5.3" fill="#CC79A7"/><circle cx="-121" cy="272.9" r="5.8" fill="#0072B2"/><circle cx="-21.1" cy="266.6" r="5.8" fill="#CC79A7"/><circle cx="330.6" cy="-171.1" r="5.8" fill="#009E73"/><circle cx="219.9" cy="-181.9" r="5.8" fill="#0072B2"/><circle cx="94.1" cy="195.6" r="5.8" fill="#CC79A7"/><circle cx="-145.8" cy="-340.5" r="5.8" fill="#0072B2"/><circle cx="-245.7" cy="330.4" r="5.8" fill="#CC79A7"/><circle cx="-310.2" cy="204.5" r="5.8" fill="#CC79A7"/><circle cx="-249.7" cy="84.7" r="5.8" fill="#CC79A7"/><circle cx="-283.9" cy="382.3" r="5.8" fill="#CC79A7"/><circle cx="93.6" cy="87.9" r="5.8" fill="#0072B2"/><circle cx="-135.9" cy="115.3" r="5.8" fill="#CC79A7"/><circle cx="-165.4" cy="373.6" r="5.8" fill="#CC79A7"/><circle cx="112.4" cy="-15.4" r="5.8" fill="#0072B2"/><circle cx="-165.5" cy="299.1" r="5.8" fill="#CC79A7"/><circle cx="54.7" cy="343.8" r="5.8" fill="#CC79A7"/><circle cx="179.4" cy="42.3" r="5.8" fill="#CC79A7"/><circle cx="-193.9" cy="453.4" r="5.8" fill="#CC79A7"/><circle cx="-273.2" cy="411.7" r="5.8" fill="#CC79A7"/><circle cx="54.2" cy="236.2" r="5.8" fill="#0072B2"/><circle cx="-10.4" cy="448.8" r="5.8" fill="#CC79A7"/><circle cx="68" cy="304.8" r="5.8" fill="#CC79A7"/><circle cx="-91.7" cy="-260.1" r="5.8" fill="#0072B2"/><circle cx="195.1" cy="-270.8" r="5.8" fill="#009E73"/><circle cx="37.2" cy="28.4" r="5.8" fill="#0072B2"/><circle cx="111.2" cy="-333.5" r="6.2" fill="#0072B2"/><circle cx="-44.6" cy="90.4" r="6.2" fill="#0072B2"/><circle cx="-257.5" cy="138.8" r="6.2" fill="#CC79A7"/><circle cx="42.8" cy="-311.5" r="6.2" fill="#0072B2"/><circle cx="272.1" cy="-32.5" r="6.2" fill="#CC79A7"/><circle cx="-167.4" cy="254.8" r="6.2" fill="#CC79A7"/><circle cx="18.5" cy="-140.5" r="6.2" fill="#E69F00"/><circle cx="-16.5" cy="157" r="6.2" fill="#CC79A7"/><circle cx="-61.9" cy="303.7" r="6.2" fill="#CC79A7"/><circle cx="-138.8" cy="-309.8" r="6.2" fill="#CC79A7"/><circle cx="-143.8" cy="-256.1" r="6.2" fill="#CC79A7"/><circle cx="-144.8" cy="-389.4" r="6.2" fill="#0072B2"/><circle cx="90.8" cy="-97.1" r="6.2" fill="#CC79A7"/><circle cx="121.6" cy="-189.3" r="6.2" fill="#0072B2"/><circle cx="-57.1" cy="242.2" r="6.2" fill="#CC79A7"/><circle cx="-82.1" cy="-340.8" r="6.2" fill="#CC79A7"/><circle cx="-165.7" cy="173" r="6.2" fill="#CC79A7"/><circle cx="-109.3" cy="-310.7" r="6.2" fill="#0072B2"/><circle cx="-1.8" cy="-350.7" r="6.2" fill="#CC79A7"/><circle cx="235" cy="74.1" r="6.2" fill="#CC79A7"/><circle cx="239" cy="11.3" r="6.2" fill="#0072B2"/><circle cx="8.7" cy="362.6" r="6.2" fill="#CC79A7"/><circle cx="30.5" cy="298.5" r="6.2" fill="#CC79A7"/><circle cx="211.5" cy="125.6" r="6.2" fill="#0072B2"/><circle cx="-95.9" cy="-159.4" r="6.2" fill="#0072B2"/><circle cx="88.4" cy="366.3" r="6.2" fill="#CC79A7"/><circle cx="-95.5" cy="334.5" r="6.2" fill="#CC79A7"/><circle cx="133.7" cy="-252.3" r="6.2" fill="#0072B2"/><circle cx="295.8" cy="-215.1" r="6.2" fill="#0072B2"/><circle cx="61.3" cy="-363.7" r="6.2" fill="#0072B2"/><circle cx="-185.2" cy="-305.3" r="6.6" fill="#CC79A7"/><circle cx="-117.7" cy="300.2" r="6.6" fill="#CC79A7"/><circle cx="35" cy="50.8" r="6.6" fill="#0072B2"/><circle cx="-86.2" cy="-387.2" r="6.6" fill="#CC79A7"/><circle cx="163.1" cy="-224.4" r="6.6" fill="#0072B2"/><circle cx="25.6" cy="-362.8" r="6.6" fill="#CC79A7"/><circle cx="239.7" cy="142" r="6.6" fill="#CC79A7"/><circle cx="-200.4" cy="-153.5" r="6.6" fill="#CC79A7"/><circle cx="-102.9" cy="422.5" r="6.6" fill="#CC79A7"/><circle cx="-45.8" cy="-187.8" r="6.6" fill="#0072B2"/><circle cx="-263.3" cy="232.5" r="6.6" fill="#0072B2"/><circle cx="7.5" cy="243.3" r="6.6" fill="#0072B2"/><circle cx="230.8" cy="-25.1" r="6.6" fill="#CC79A7"/><circle cx="-45.5" cy="-446.7" r="6.9" fill="#0072B2"/><circle cx="174.7" cy="176.7" r="6.9" fill="#CC79A7"/><circle cx="-205.3" cy="406" r="6.9" fill="#0072B2"/><circle cx="116.7" cy="-371.2" r="6.9" fill="#CC79A7"/><circle cx="318.3" cy="-99.7" r="6.9" fill="#0072B2"/><circle cx="-100" cy="33.9" r="6.9" fill="#0072B2"/><circle cx="97.8" cy="47.8" r="6.9" fill="#0072B2"/><circle cx="109.1" cy="-59" r="6.9" fill="#0072B2"/><circle cx="261.2" cy="172.1" r="6.9" fill="#0072B2"/><circle cx="251.5" cy="-194.4" r="6.9" fill="#0072B2"/><circle cx="259.4" cy="117" r="6.9" fill="#0072B2"/><circle cx="-198.6" cy="200.5" r="7.2" fill="#0072B2"/><circle cx="38.8" cy="-278.2" r="7.2" fill="#E69F00"/><circle cx="-106.5" cy="171.6" r="7.2" fill="#CC79A7"/><circle cx="-169.6" cy="-154" r="7.2" fill="#CC79A7"/><circle cx="-5" cy="2.8" r="7.2" fill="#0072B2"/><circle cx="-47.6" cy="58.8" r="7.2" fill="#0072B2"/><circle cx="-38.3" cy="311" r="7.2" fill="#CC79A7"/><circle cx="-85" cy="395" r="7.2" fill="#CC79A7"/><circle cx="-0.5" cy="-321.7" r="7.2" fill="#0072B2"/><circle cx="168.9" cy="134.1" r="7.5" fill="#CC79A7"/><circle cx="-38.6" cy="175.2" r="7.5" fill="#0072B2"/><circle cx="63" cy="-256.8" r="7.5" fill="#E69F00"/><circle cx="-5.3" cy="-235.7" r="7.5" fill="#E69F00"/><circle cx="-130.1" cy="222.8" r="7.5" fill="#0072B2"/><circle cx="-81.7" cy="262.8" r="7.5" fill="#0072B2"/><circle cx="257.9" cy="24.3" r="7.5" fill="#CC79A7"/><circle cx="116.7" cy="-98.3" r="7.5" fill="#CC79A7"/><circle cx="-41.6" cy="-313.3" r="7.5" fill="#CC79A7"/><circle cx="268.9" cy="79.1" r="7.5" fill="#CC79A7"/><circle cx="60.5" cy="-420.4" r="7.5" fill="#CC79A7"/><circle cx="37.6" cy="-177" r="7.5" fill="#0072B2"/><circle cx="-330.9" cy="262.5" r="7.8" fill="#CC79A7"/><circle cx="-136" cy="80" r="7.8" fill="#0072B2"/><circle cx="367.6" cy="-166.4" r="7.8" fill="#0072B2"/><circle cx="212" cy="45.4" r="7.8" fill="#0072B2"/><circle cx="-58.2" cy="-228.2" r="7.8" fill="#0072B2"/><circle cx="161.6" cy="-50.6" r="8.1" fill="#CC79A7"/><circle cx="-239.4" cy="21.3" r="8.1" fill="#0072B2"/><circle cx="25.6" cy="-394.7" r="8.1" fill="#E69F00"/><circle cx="20.4" cy="-263.2" r="8.1" fill="#0072B2"/><circle cx="103.9" cy="17.4" r="8.1" fill="#0072B2"/><circle cx="174.9" cy="-178.4" r="8.1" fill="#0072B2"/><circle cx="227.2" cy="-238.8" r="8.1" fill="#0072B2"/><circle cx="-210.3" cy="281.2" r="8.3" fill="#CC79A7"/><circle cx="-229.4" cy="386.1" r="8.3" fill="#CC79A7"/><circle cx="-15.1" cy="-198.4" r="8.3" fill="#0072B2"/><circle cx="-211.5" cy="313.6" r="8.5" fill="#CC79A7"/><circle cx="-252.2" cy="174" r="8.5" fill="#0072B2"/><circle cx="185.1" cy="-27.5" r="8.5" fill="#0072B2"/><circle cx="96.9" cy="217.2" r="8.5" fill="#CC79A7"/><circle cx="49.6" cy="166.3" r="8.5" fill="#0072B2"/><circle cx="125.8" cy="89.9" r="8.8" fill="#CC79A7"/><circle cx="-93.6" cy="118.7" r="8.8" fill="#0072B2"/><circle cx="-172.8" cy="334.5" r="8.8" fill="#CC79A7"/><circle cx="202.4" cy="95.4" r="9" fill="#0072B2"/><circle cx="154.7" cy="102.2" r="9" fill="#0072B2"/><circle cx="143" cy="55.1" r="9" fill="#CC79A7"/><circle cx="203.1" cy="19.3" r="9" fill="#0072B2"/><circle cx="141.3" cy="24.5" r="9" fill="#0072B2"/><circle cx="-233.5" cy="203.8" r="9.2" fill="#CC79A7"/><circle cx="172.6" cy="75" r="9.2" fill="#0072B2"/><circle cx="59.7" cy="100.5" r="9.4" fill="#CC79A7"/><circle cx="-21.8" cy="-393.1" r="9.6" fill="#0072B2"/><circle cx="-61.6" cy="131.9" r="10.3" fill="#0072B2"/><circle cx="231.1" cy="-137.1" r="10.3" fill="#E69F00"/><circle cx="-34.7" cy="-349.2" r="10.5" fill="#0072B2"/><circle cx="189" cy="-136.8" r="10.7" fill="#0072B2"/><circle cx="94.6" cy="147.7" r="12.3" fill="#0072B2"/></g></svg><!-- /network-still -->
+        <div class="legend"><span><i style="background:#E69F00"></i>seed</span><span><i style="background:#0072B2"></i>recall</span><span><i style="background:#009E73"></i>search</span><span><i style="background:#CC79A7"></i>reference lists</span></div>
+        <p class="small muted" style="margin:8px 4px 0">The run's network page: 207 papers and 1,041 citations among them. Shown: its main connected cloud, 188 papers. In the browser, hover for a paper, click to open it, drag to rearrange.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8 -->
+  <section class="slide" data-section="Compared" data-accent="var(--blue)" aria-label="More than a chatbot or a search engine">
+    <h2>ChatGPT suggests papers. Google Scholar matches keywords. PaperRaven does the rest.</h2>
+    <table>
+      <thead><tr><th></th><th>Asking ChatGPT</th><th>Google Scholar</th><th class="us">PaperRaven</th></tr></thead>
+      <tbody>
+        <tr class="rv" data-step="1"><td>Are the papers real?</td><td>Some may not exist, or have the wrong details</td><td>Yes</td><td class="us">Every one matched to a database record</td></tr>
+        <tr class="rv" data-step="1"><td>What it finds</td><td>Often the same few papers</td><td>What matches your keywords, ranked</td><td class="us">New papers round after round, including ones that share none of your keywords</td></tr>
+        <tr class="rv" data-step="2"><td>Your criteria</td><td>None</td><td>None</td><td class="us">A separate judge applies criteria you approved, and gives its reason</td></tr>
+        <tr class="rv" data-step="2"><td>Citations</td><td>None</td><td>“Cited by”, one paper at a time</td><td class="us">Ranks the works your whole corpus cites, late in a run, with your OK</td></tr>
+        <tr class="rv" data-step="3"><td>What you keep</td><td>A chat</td><td>A list of results</td><td class="us">A bibliography, every decision with who made it, a citation network, the PDFs it can get, and an audit trail</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 9 -->
+  <section class="slide" data-section="Guarantees" data-accent="var(--blue)" aria-label="What you can rely on, and what it cannot promise">
+    <h2>What you can rely on, and what it cannot promise.</h2>
+    <div class="cols">
+      <div>
+        <h3 class="blue">Enforced by the code, not the LLM</h3>
+        <ul class="ok-list">
+          <li><b>Every paper exists:</b> matched to OpenAlex or Crossref.</li>
+          <li><b>The details are the database's,</b> not the LLM's memory.</li>
+          <li><b>Every decision is recorded,</b> with who made it.</li>
+          <li><b>Nothing disappears silently:</b> every proposal is accounted for.</li>
+          <li><b>Year limits are rules,</b> not a judge's reading.</li>
+          <li><b>The export can be checked,</b> file by file.</li>
+        </ul>
+      </div>
+      <div class="rv" data-step="1">
+        <h3 class="red">Not promised</h3>
+        <ul class="no-list">
+          <li><b>Completeness.</b> No tool that asks a model for papers can say how many it missed.</li>
+          <li><b>Identical relevance calls.</b> Relevance is a model's judgement.</li>
+          <li><b>The same corpus twice.</b> A second run finds a similar corpus, not the same one.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 -->
+  <section class="slide" data-section="Safety" data-accent="var(--search)" aria-label="Safe to run, and polite to the sites it uses">
+    <h2>Safe to run, and polite to the sites it uses.</h2>
+    <p class="small muted lead"><span class="tag enf">enforced</span> by PaperRaven's code or by Claude Code · <span class="tag ins">instructed</span> a rule the LLM is told to follow</p>
+    <div class="safe">
+      <div class="card rv" data-step="1" style="--c:var(--blue)">
+        <h4>The LLM is fenced in</h4>
+        <ul>
+          <li>Only the code writes the run's state; the LLM writes answer files. <span class="tag ins">instructed</span></li>
+          <li>The judge can only read, write and search the web; the close-out reviewer can only read. <span class="tag enf">enforced</span></li>
+          <li>Titles and abstracts are data, never instructions. <span class="tag ins">instructed</span></li>
+          <li>No made-up DOIs, no downloads outside <code>fetch</code>, and never a look at your <code>.env</code>. <span class="tag ins">instructed</span></li>
+        </ul>
+      </div>
+      <div class="card rv" data-step="2" style="--c:var(--search)">
+        <h4>Polite to publishers</h4>
+        <ul>
+          <li>At most one request every 10 s to a publisher, and at most 25 per publisher. <span class="tag enf">enforced</span></li>
+          <li>It stops asking a publisher at its first refusal. <span class="tag enf">enforced</span></li>
+          <li>It bypasses no paywall and logs in nowhere. <span class="tag enf">enforced</span></li>
+          <li>It refuses local and private network addresses, so a link cannot send it into your own network. <span class="tag enf">enforced</span></li>
+        </ul>
+      </div>
+      <div class="card rv" data-step="3" style="--c:var(--refs)">
+        <h4>Your information stays yours</h4>
+        <ul>
+          <li>Your email goes only to OpenAlex and Crossref, and is redacted in the export. <span class="tag enf">enforced</span></li>
+          <li>Your OpenAlex key is never written into a run or its export. <span class="tag enf">enforced</span></li>
+          <li>No telemetry: nothing goes to PaperRaven's author or anyone else. <span class="tag enf">enforced</span></li>
+          <li>PDFs never go where git would track them. <span class="tag enf">enforced</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11 -->
+  <section class="slide" data-section="" aria-label="Closing: how to get PaperRaven">
+    <div class="hero">
+      <div>
+        <h2 style="font-size:48px">PaperRaven 0.1.0 runs inside Claude Code. No model API key is needed.</h2>
+        <div class="install">python3.11 -m venv .venv
+.venv/bin/pip install git+https://github.com/aaronclauset/paperraven
+.venv/bin/paperraven install-skill</div>
+        <p class="small" style="margin-top:22px">Then type <code>/paperraven</code> in Claude Code. · <a href="https://github.com/aaronclauset/paperraven">github.com/aaronclauset/paperraven</a></p>
+        <p class="small muted">A. Clauset, “PaperRaven: a machine assistant for generating topic-bounded, verified samples of the scientific literature”, 2026.</p>
+      </div>
+      <img src="paperraven.png" alt="The PaperRaven logo">
+    </div>
+  </section>
+
+  <button id="replay" type="button">Play again</button>
+  <div id="live" class="sr" aria-live="polite"></div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  // The run's final corpus, by the round that found each paper and how it was found.
+  var FOUND = {
+    recall:     [5,5,4,5,3,5,4,5,4,4,5,4,3,5,1,3,5,5,3,1,5,0,5,3,1,4,2,0,2,0,0,0,4,0,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0],
+    search:     [0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,0,0,0,0,2,0,5,0,0,3,0,2,1,0,2,5,3,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    references: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,4,5,1,2,3,2,2,4,4,4,4,3,5,3,2,4,1,5,1,2]
+  };
+  var PHASES = [[1, 14, 1], [15, 35, 2], [36, 56, 3]];   // first round, last round, the step that names it
+  var LATE = 36;                      // the first round proposing from the corpus's citations
+
+  var stage = document.getElementById("stage");
+  var slides = Array.prototype.slice.call(document.querySelectorAll(".slide"));
+  var head = document.getElementById("head"), sect = document.getElementById("sect");
+  var folio = document.getElementById("folio"), live = document.getElementById("live");
+  var hint = document.getElementById("hint"), replay = document.getElementById("replay");
+  var autoplay = /(^|[?&])autoplay(=|&|$)/.test(location.search);
+  var steps = slides.map(function (s) {
+    return Array.prototype.reduce.call(s.querySelectorAll("[data-step]"),
+      function (m, e) { return Math.max(m, +e.getAttribute("data-step")); }, 0);
+  });
+  var last = slides.length - 1, at = {s: -1, t: 0}, timer = null;
+
+  function average(v, i, half) {      // a centred moving average, shortened at the ends
+    var lo = Math.max(0, i - half), hi = Math.min(v.length - 1, i + half), s = 0;
+    for (var j = lo; j <= hi; j++) s += v[j];
+    return s / (hi - lo + 1);
+  }
+
+  function drawChart() {
+    var svg = document.getElementById("chart"), NS = "http://www.w3.org/2000/svg";
+    var W = 1392, H = 400, L = 56, B = 40, T = 44, n = FOUND.recall.length, bw = (W - L - 8) / n;
+    var y = function (v) { return H - B - v * (H - B - T) / 5; };
+    var x = function (r) { return L + (r - 0.5) * bw; };           // the centre of round r
+    function el(name, attrs, text, parent) {
+      var e = document.createElementNS(NS, name);
+      for (var k in attrs) e.setAttribute(k, attrs[k]);
+      if (text !== undefined) e.textContent = text;
+      (parent || svg).appendChild(e); return e;
+    }
+    [1, 2, 3, 4].forEach(function (v) { el("line", {"class": "grid", x1: L, x2: W - 4, y1: y(v), y2: y(v)}); });
+    var bars = el("g", {"class": "bars"});
+    var total = FOUND.recall.map(function (_, i) { return FOUND.recall[i] + FOUND.search[i] + FOUND.references[i]; });
+    total.forEach(function (_, i) {
+      var base = 0;
+      ["recall", "search", "references"].forEach(function (k) {
+        var v = FOUND[k][i];
+        if (v) el("rect", {"class": k, x: L + i * bw + bw * 0.12, y: y(base + v), width: bw * 0.76,
+                           height: y(base) - y(base + v)}, undefined, bars);
+        base += v;
+      });
+    });
+    PHASES.forEach(function (p) {
+      if (p[0] > 1) el("line", {"class": "phase", x1: L + (p[0] - 1) * bw, x2: L + (p[0] - 1) * bw, y1: T - 30, y2: H - B});
+      el("text", {"class": "ptitle", x: L + (p[0] - 1) * bw + 10, y: T - 12},
+         p[2] === 1 ? "recall" : p[2] === 2 ? "recall thins, search fills in" : "the corpus's reference lists");
+    });
+    function path(values, upto) {
+      var d = "";
+      for (var i = 0; i < upto; i++) d += (i ? " L" : "M") + x(i + 1).toFixed(1) + " " + y(average(values, i, 2)).toFixed(1);
+      return d;
+    }
+    el("path", {"class": "trend", d: path(total, n)});
+    el("path", {"class": "trend-recall", d: path(FOUND.recall, LATE - 1)});
+    el("line", {"class": "axis", x1: L, x2: W - 4, y1: H - B, y2: H - B});
+    [0, 5].forEach(function (v) { el("text", {x: L - 14, y: y(v) + 6, "text-anchor": "end"}, String(v)); });
+    el("text", {x: L, y: H - B + 28}, "round 1");
+    [15, LATE, n].forEach(function (r) { el("text", {x: x(r), y: H - B + 28, "text-anchor": "middle"}, String(r)); });
+  }
+
+  function fit() {
+    var s = Math.min(window.innerWidth / 1600, window.innerHeight / 900);
+    stage.style.setProperty("--s", s);
+  }
+
+  function show(s, t) {
+    var changed = s !== at.s;
+    at = {s: s, t: t};
+    slides.forEach(function (sl, i) {
+      var on = i === s;
+      sl.classList.toggle("active", on);
+      sl.setAttribute("aria-hidden", on ? "false" : "true");
+      Array.prototype.forEach.call(sl.querySelectorAll("[data-step]"), function (e) {
+        e.classList.toggle("on", on && +e.getAttribute("data-step") <= t);
+      });
+    });
+    var accent = slides[s].getAttribute("data-accent");
+    if (accent) stage.style.setProperty("--accent", accent); else stage.style.removeProperty("--accent");
+    head.style.opacity = (s === 0 || s === last) ? 0 : 1;
+    sect.textContent = slides[s].getAttribute("data-section") || "";
+    sect.style.display = sect.textContent ? "" : "none";
+    folio.textContent = (s + 1) + " / " + slides.length;
+    if (changed) live.textContent = "Slide " + (s + 1) + " of " + slides.length + ": " + slides[s].getAttribute("aria-label");
+    try { history.replaceState(null, "", location.search + "#" + s + "." + t); } catch (e) { /* a file: page may refuse */ }
+    replay.style.display = (autoplay && s === last && t === steps[last]) ? "block" : "none";
+    clearTimeout(timer);
+    if (autoplay && !(s === last && t === steps[last])) timer = setTimeout(forward, dwell(s, t));
+  }
+
+  function dwell(s, t) {
+    if (s === 0) return 7000;
+    if (t === 0) return 3500;
+    return 5500;
+  }
+  function forward() {
+    if (at.t < steps[at.s]) show(at.s, at.t + 1);
+    else if (at.s < last) show(at.s + 1, 0);
+  }
+  function backward() {
+    if (at.t > 0) show(at.s, at.t - 1);
+    else if (at.s > 0) show(at.s - 1, steps[at.s - 1]);
+  }
+  function quietHint() { if (hint) hint.style.opacity = 0; }
+
+  document.addEventListener("keydown", function (e) {
+    if (e.target && e.target.closest && e.target.closest("a, button")) return;   // a focused link keeps its Enter
+    var k = e.key;
+    if (k === "ArrowRight" || k === " " || k === "PageDown" || k === "Enter") { e.preventDefault(); forward(); }
+    else if (k === "ArrowLeft" || k === "PageUp" || k === "Backspace") { e.preventDefault(); backward(); }
+    else if (k === "Home") { show(0, 0); }
+    else if (k === "End") { show(last, steps[last]); }
+    else if (k === "f" || k === "F") {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen();
+    } else return;
+    quietHint();
+  });
+  stage.addEventListener("click", function (e) {
+    if (e.target === replay || (e.target.closest && e.target.closest("a"))) return;
+    forward(); quietHint();
+  });
+  replay.addEventListener("click", function (e) { e.stopPropagation(); show(0, 0); });
+
+  var idle;
+  document.addEventListener("mousemove", function () {
+    document.body.classList.remove("idle"); clearTimeout(idle);
+    idle = setTimeout(function () { document.body.classList.add("idle"); }, 2000);
+  });
+  window.addEventListener("resize", fit);
+  if (window.ResizeObserver) new ResizeObserver(fit).observe(document.documentElement);
+
+  drawChart();
+  fit();
+  var m = /^#(\d+)\.(\d+)$/.exec(location.hash);
+  if (m) { var s = Math.min(+m[1], last); show(s, Math.min(+m[2], steps[s])); }
+  else show(0, 0);
+  if (autoplay && hint) hint.style.display = "none";
+})();
+</script>
+</body>
+</html>

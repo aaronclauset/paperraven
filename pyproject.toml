@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paperraven"
+dynamic = ["version"]
+description = "A machine assistant for generating topic-bounded, verified samples of the scientific literature."
+requires-python = ">=3.11"
+license = "BSD-3-Clause"
+authors = [{name = "Aaron Clauset"}]
+# Only what src/paperraven imports.
+dependencies = [
+    "pydantic>=2.6",
+    "python-dotenv>=1.0",
+    "pypdf>=4",
+    "pyyaml>=6",
+    "rapidfuzz>=3",
+    # 2.32.4 fixed CVE-2024-47081 (.netrc credentials sent to a crafted URL's host); `fetch`
+    # follows publisher redirects.
+    "requests>=2.32.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/aaronclauset/paperraven"
+
+[project.scripts]
+paperraven = "paperraven.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["paperraven*"]
+
+[tool.setuptools.package-data]
+paperraven = ["prompts/*.md", "skill/*.md", "skill/agents/*.md"]
+
+[tool.setuptools.dynamic]
+version = {attr = "paperraven.__version__"}

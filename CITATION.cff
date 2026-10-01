@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use PaperRaven, please cite it as below."
+type: software
+title: "PaperRaven: a machine assistant for generating topic-bounded, verified samples of the scientific literature"
+authors:
+  - family-names: Clauset
+    given-names: Aaron
+version: 0.1.0
+date-released: 2026-10-01
+url: "https://github.com/aaronclauset/paperraven"
+repository-code: "https://github.com/aaronclauset/paperraven"
+license: BSD-3-Clause

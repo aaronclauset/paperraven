@@ -1,0 +1,8 @@
+.venv/
+runs/
+__pycache__/
+*.egg-info/
+build/
+.env
+# PaperRaven exports, and the PDFs fetched into them
+*-corpus/
