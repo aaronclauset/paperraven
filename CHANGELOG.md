@@ -2,6 +2,21 @@
 
 All notable changes to PaperRaven are listed here, newest first.
 
+## 0.2.0
+
+**Added**
+- `citing`: late in a run, PaperRaven can now generate proposals from the works that cite the
+  corpus. This feature helps fill in more recent work on a topic.
+- `SECURITY.md`.
+
+**Changed**
+- The demo deck follows a new run, using all four sources.
+
+**Fixed**
+- `fetch` no longer puts seed papers on the click-list: `export` copies the seed PDFs into
+  `pdfs/`.
+- A code comment described a setting the release no longer has.
+
 ## 0.1.0 — first release
 
 - **Corpus building in Claude Code** (`/paperraven`): an interview that turns your topic and

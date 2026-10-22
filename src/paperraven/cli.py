@@ -389,9 +389,11 @@ def cmd_submit(args) -> int:
     log = outcome.log
     lines.append(f"  found by: {log.from_recall or 0} recall, {log.from_search or 0} search, "
                  + (f"{log.from_references} references, " if log.from_references else "")
+                 + (f"{log.from_citing} citing, " if log.from_citing else "")
                  + f"{log.source_not_stated or 0} not stated")
     payload["found_by"] = {"recall": log.from_recall or 0, "search": log.from_search or 0,
                            "references": log.from_references or 0,
+                           "citing": log.from_citing or 0,
                            "not_stated": log.source_not_stated or 0}
     lines += registry_lines(log.registry)
     payload["registry"] = log.registry
@@ -596,6 +598,29 @@ def cmd_references(args) -> int:
     return EXIT_OK
 
 
+def cmd_citing(args) -> int:
+    from .references import CITING_NAME, list_citing, write_candidates
+    runner = _runner(args)
+    listing = list_citing(runner.corpus, runner.config, runner.verifier.primary,
+                          now=args.now, min_cites=args.min_cites, limit=args.limit,
+                          refresh=args.refresh)
+    r = runner.next_round
+    listing = {"round": r, **listing}
+    md, _js = write_candidates(runner.corpus.round_dir(r), listing, name=CITING_NAME)
+    n = listing["candidates_total"]
+    counts = " · ".join(f"cite {t} or more: {c}" for t, c in listing["counts"].items())
+    _emit({**listing, "file": str(md)}, [
+        f"{n} work{'' if n == 1 else 's'} citing at least {listing['min_cites']} corpus papers "
+        f"and not yet in the run; top {len(listing['listed'])} listed in {md}",
+        *([f"  {counts}"] if counts else []),
+        *([f"  {listing['note']}"] if listing.get("note") else []),
+        f"  {listing['openalex_calls']} OpenAlex calls",
+        "  propose those within the criteria with \"source\": \"citing\"; list the others "
+        "under declined_candidates",
+    ], args.json)
+    return EXIT_OK
+
+
 def cmd_status(args) -> int:
     runner = _runner(args)
     st = runner.status()
@@ -668,7 +693,7 @@ def cmd_export(args) -> int:
         lines.append(f"library: {lib['new']} new to you, {lib['in_library']} already in "
                      f"{Path(lib['file']).name}; {lib['without_doi']} library entries had no "
                      f"DOI and were not compared")
-    lines += [report["worklist"], report["abstracts"]]
+    lines += [report["worklist"], report["abstracts"], *seed_pdf_lines(report["seed_pdfs"])]
     # The previous export's files, removed or kept, said.
     removed, kept = report.get("removed_stale") or [], report.get("kept_edited") or []
     if removed:
@@ -686,6 +711,24 @@ def cmd_export(args) -> int:
                                    api_key=_openalex_key(), transcripts=_transcripts()))
     _emit(report, lines, args.json)
     return EXIT_OK
+
+
+def seed_pdf_lines(seed: dict) -> list[str]:
+    """What `export` did with the user's seed PDFs, said only when there is something to say."""
+    lines = []
+    if seed["listed"]:
+        lines.append(f"pdfs/: {seed['listed']} of your seed PDFs are there ({seed['copied']} "
+                     f"copied now), so `fetch` will not ask you for them")
+    if seed["refused"]:
+        lines.append(f"your seed PDFs were not copied: {seed['refused']}")
+    if seed["name_taken"]:
+        lines.append(f"not copied, another file already has the paper's name in pdfs/: "
+                     f"{', '.join(seed['name_taken'])}")
+    if seed["unplaced"]:
+        lines.append(f"seed files not copied (no paper of the corpus, or a second file for "
+                     f"one): "
+                     f"{', '.join(seed['unplaced'])}")
+    return lines
 
 
 FETCH_ADVICE = (
@@ -1005,6 +1048,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--now", action="store_true",
                    help="list before supply has thinned; only when the user asked for it")
     p.set_defaults(func=cmd_references)
+
+    p = sub.add_parser("citing", help="list the works citing the corpus that are not yet in "
+                                      "the run, ranked by how much of their reference list "
+                                      "the corpus is (late in a run)")
+    p.add_argument("--min-cites", type=_at_least_one, default=2,
+                   help="list only works citing at least this many corpus papers (default 2)")
+    p.add_argument("--limit", type=_at_least_one, default=30,
+                   help="how many candidates to list (default 30)")
+    p.add_argument("--now", action="store_true",
+                   help="list before it has opened; only when the user asked for it")
+    p.add_argument("--refresh", action="store_true",
+                   help="search OpenAlex again rather than rank from the saved search")
+    p.set_defaults(func=cmd_citing)
 
     p = sub.add_parser("status", help="discovery curve, supply, stop signal")
     p.set_defaults(func=cmd_status)

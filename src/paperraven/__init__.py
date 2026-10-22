@@ -8,4 +8,4 @@ builds.
 #: `Politeness.user_agent_version` carries the same value for a different purpose — identifying
 #: the tool to a metadata registry — and is set in config. The two must agree, and are kept
 #: apart rather than coupled.
-__version__ = "0.1.0"
+__version__ = "0.2.0"

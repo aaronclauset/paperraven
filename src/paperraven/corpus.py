@@ -585,6 +585,7 @@ class Corpus:
             from_recall=found_by.get("recall"),
             from_search=found_by.get("search"),
             from_references=found_by.get("references"),
+            from_citing=found_by.get("citing"),
             source_not_stated=found_by.get("not stated"),
             doi_recovered_by_title=doi_recovered_by_title,
             registry=registry,

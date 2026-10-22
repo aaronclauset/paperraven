@@ -199,12 +199,18 @@ def _seeds_outside(seeds: list, topic) -> dict[str, Any]:
     return {"count": len(out), "of": len(seeds), "years": sorted(out)}
 
 
-def _decline_reasons(submits: list) -> list[dict[str, Any]]:
-    """The proposer's reasons for its declines, each with the rounds that gave it and how
-    many candidates they declined; rounds that gave none come last, under `None`."""
+def _declined_from(d: dict[str, Any], listing: str) -> bool:
+    """Whether a decision declined a candidate of `listing` (`references` declines carry no
+    `listing`)."""
+    return d.get("kind") == "declined_candidate" and d.get("listing", "references") == listing
+
+
+def _decline_reasons(submits: list, listing: str = "references") -> list[dict[str, Any]]:
+    """The proposer's reasons for its declines from `listing`, each with the rounds that gave it
+    and how many candidates they declined; rounds that gave none come last, under `None`."""
     groups: dict[str | None, dict[str, Any]] = {}
     for e in submits:
-        n = sum(1 for d in e.decisions if d.get("kind") == "declined_candidate")
+        n = sum(1 for d in e.decisions if _declined_from(d, listing))
         if n:
             g = groups.setdefault((e.result or {}).get("decline_reason"),
                                   {"rounds": [], "declined": 0})
@@ -318,8 +324,15 @@ def run_summary(corpus: "Corpus", config: "Config") -> dict[str, Any]:
                                       if e.counts.get("found_by_references")), default=None),
         "references_in_corpus": sum(1 for r in corpus.greenlist.values()
                                     if r.provenance.proposer_source == "references"),
-        "references_declined": sum(1 for d in decisions if d.get("kind") == "declined_candidate"),
+        "references_declined": sum(1 for d in decisions if _declined_from(d, "references")),
         "references_decline_reasons": _decline_reasons(submits),
+        # The same for the works that cite the corpus (`citing`).
+        "citing_from_round": min((e.round for e in submits
+                                  if e.counts.get("found_by_citing")), default=None),
+        "citing_in_corpus": sum(1 for r in corpus.greenlist.values()
+                                if r.provenance.proposer_source == "citing"),
+        "citing_declined": sum(1 for d in decisions if _declined_from(d, "citing")),
+        "citing_decline_reasons": _decline_reasons(submits, "citing"),
         "judged_without_abstract": sum(1 for r in verified
                                        if r.relevance.judged_without_abstract),
         # Abstracts Europe PMC supplied for verified papers the registry had none for.

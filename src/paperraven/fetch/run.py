@@ -42,6 +42,8 @@ from .clicklist import write_click_list
 from .identify import IDENTIFIED, Target, identify, identify_folder, scan_folder, sha256
 
 MANIFEST = "fetch_manifest.json"
+#: The user's seed PDFs `export` copied into the folder: per entry, the file and its SHA-256.
+SEEDS = "seeds.json"
 UNVERIFIED = "_unverified"
 #: Where a preprint goes when the user collects its published version.
 PREPRINTS = "_preprints"
@@ -166,6 +168,13 @@ def fetch_bibliography(entries: list[BibEntry], dest: Path, *, bib_path: Path, c
             for item in by_id[ident]:
                 item.outcome, item.record = "already_present", dict(record)
                 item.version_warning = _preprint_warning(record)
+        # The user's seed PDFs, listed by `export`: each is its entry's while its content is
+        # unchanged, even one whose page 1 identifies nothing.
+        for ident, path in listed_seeds(dest).items():
+            for item in by_id.get(ident, []):
+                if not item.outcome:
+                    item.outcome = "already_present"
+                    item.record = {"file": path.name, "identified_by": "your seed (export)"}
 
         # --collect: copy in what the user downloaded. Read with a throwaway cache: nothing
         # from the user's other files may reach the manifest.
@@ -287,6 +296,25 @@ def _download_all(todo: list[Item], plans: list["Plan"], dest: Path, client, cac
             for future in futures:
                 future.cancel()
             raise
+
+
+def listed_seeds(dest: Path) -> dict[str, Path]:
+    """The files `SEEDS` lists that `dest` holds unchanged, by entry; a name that is not a plain
+    file name in `dest`, or a list that is not ours to read, is ignored."""
+    try:
+        seeds = json.loads((dest / SEEDS).read_text(encoding="utf-8")).get("seeds")
+    except (OSError, ValueError, UnicodeDecodeError, AttributeError):
+        return {}
+    out = {}
+    for ident, entry in (seeds.items() if isinstance(seeds, dict) else ()):
+        name = entry.get("file") if isinstance(entry, dict) else None
+        if not (isinstance(name, str) and name and Path(name).name == name
+                and not name.startswith(".")):
+            continue
+        path = dest / name
+        if path.is_file() and _digest(path) == entry.get("sha256"):
+            out[ident] = path
+    return out
 
 
 def _kept_record(prev: dict | None, path: Path) -> dict[str, Any]:

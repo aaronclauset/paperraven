@@ -60,7 +60,7 @@ PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 #: Which shipped prompt each command renders. Here rather than in the CLI so that the code
 #: that renders the judge prompt and the code that prints its name cannot disagree.
 PROMPTS = {
-    "propose": "propose_v0.8.md",
+    "propose": "propose_v0.9.md",
     "distill": "distill_v0.1.md",
     "judge": "judge_v0.1.md",
 }
@@ -363,11 +363,15 @@ def evaluate_stopping(
 
     # Short rounds, or rounds the judge mostly turned away, open the `references` list. Said
     # until the list is in use, so the agent knows when to ask the user.
-    from .references import gate, in_use
+    from .references import citing_gate, citing_in_use, gate, in_use
     if gate(corpus, config) is None and not in_use(corpus):
         notes.append("supply is thinning, so `references` is open: it lists the works the "
                      "corpus cites that are not yet in the run. Ask the user once before "
                      "using it")
+    if citing_gate(corpus, config) is None and not citing_in_use(corpus):
+        notes.append("supply is thinning again, so `citing` is open: it lists the works that "
+                     "cite the corpus and are not yet in the run. Ask the user once before "
+                     "using it, and how many papers they want from it")
 
     return StopSignal(should_stop=bool(reasons), reasons=reasons, notes=notes)
 
@@ -988,13 +992,15 @@ class Runner:
         return out
 
     def _declined_candidates(self, raw: Any) -> list[str]:
-        """The `references` candidates the proposer chose not to propose, as OpenAlex work IDs.
+        """The listed candidates the proposer chose not to propose, as OpenAlex work IDs, from
+        this round's `references` or `citing` listing (`last_declined_from` says which).
 
         A later listing leaves them out, so a decline is a lasting decision: it is accepted only
         for a candidate this round's own listing showed. Anything else is noted and skipped.
         """
-        from .references import CANDIDATES_NAME
+        from .references import CANDIDATES_NAME, CITING_NAME
 
+        self.last_declined_from: dict[str, str] = {}
         given = raw.get("declined_candidates") if isinstance(raw, dict) else None
         if given is None:
             return []
@@ -1002,13 +1008,16 @@ class Runner:
             self.last_parse_errors.append(
                 "declined_candidates must be a list of OpenAlex work IDs; ignored")
             return []
-        listing_path = self.corpus.round_dir(self.next_round) / f"{CANDIDATES_NAME}.json"
-        try:
-            listing = json.loads(listing_path.read_text(encoding="utf-8"))
-            shown = ({c.get("openalex_id") for c in listing.get("listed") or []}
-                     if listing.get("round") == self.next_round else set())
-        except (OSError, ValueError, AttributeError):
-            shown = set()
+        shown: dict[str, str] = {}
+        for name, listing_kind in ((CITING_NAME, "citing"), (CANDIDATES_NAME, "references")):
+            path = self.corpus.round_dir(self.next_round) / f"{name}.json"
+            try:
+                listing = json.loads(path.read_text(encoding="utf-8"))
+                if listing.get("round") == self.next_round:
+                    shown.update({c.get("openalex_id"): listing_kind
+                                  for c in listing.get("listed") or []})
+            except (OSError, ValueError, AttributeError):
+                pass
         out = []
         for entry in given:
             if not ((wid := work_id(entry)) and wid[1:].isdigit()):
@@ -1016,10 +1025,11 @@ class Runner:
                     f"declined candidate {entry!r} is not an OpenAlex work ID; skipped")
             elif wid not in shown:
                 self.last_parse_errors.append(
-                    f"declined candidate {wid} is not in this round's `references` listing; "
-                    f"skipped")
+                    f"declined candidate {wid} is not in this round's `references` or "
+                    f"`citing` listing; skipped")
             else:
                 out.append(wid)
+                self.last_declined_from[wid] = shown[wid]
         return sorted(set(out))
 
     def _decline_reason(self, raw: Any, declined: list[str]) -> str | None:
@@ -1188,9 +1198,11 @@ class Runner:
         )
         dropped = list(getattr(self, "last_dropped", ()) or ())
         declined = list(getattr(self, "last_declined", ()) or ())
+        declined_from = dict(getattr(self, "last_declined_from", {}) or {})
         inbound = getattr(self, "last_inbound", None)
         self.last_dropped = []
         self.last_declined = []
+        self.last_declined_from = {}
         self.last_decline_reason = None
         self.last_inbound = None
 
@@ -1235,7 +1247,9 @@ class Runner:
             decisions=(
                 [{"kind": "rejected", **rej.model_dump(mode="json")} for rej in rejections]
                 + [{"kind": "dropped", **d} for d in dropped]
-                + [{"kind": "declined_candidate", "openalex_id": w} for w in declined]
+                + [{"kind": "declined_candidate", "openalex_id": w,
+                    **({"listing": "citing"} if declined_from.get(w) == "citing" else {})}
+                   for w in declined]
                 + doi_failed
                 + [{"kind": "abstract_lookup", "service": "europe_pmc", "doi": doi,
                     "outcome": outcome}
@@ -1586,7 +1600,8 @@ class Runner:
 
     def export(self, dest: str | Path | None = None,
                *, pdf_dir: str | Path | None = None,
-               library: str | Path | None = None) -> dict[str, Any]:
+               library: str | Path | None = None,
+               base_dir: Path | None = None) -> dict[str, Any]:
         """Write the deliverable with `export.write_export`.
 
         The default destination is beside `runs/`, not inside the run: runs are
@@ -1602,7 +1617,8 @@ class Runner:
         # lists verification stored.
         report = write_export(self.corpus, self.config, self.run_dir, target, pdf_dir=pdf_dir,
                               library=library,
-                              reference_lists=reference_lists(self.corpus, None))
+                              reference_lists=reference_lists(self.corpus, None),
+                              base_dir=base_dir)
         return {
             **report,
             # An export taken while a steer's re-judge is outstanding carries

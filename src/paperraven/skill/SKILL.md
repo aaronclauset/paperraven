@@ -172,7 +172,7 @@ identify its title (and DOI if you can), and finish the seeding — one call per
 context  →  you write proposals.json  →  submit  →  judge  →  you write judging_response.json  →  verdicts
 ```
 
-**Check in with the user after round 1, then every 5 rounds, and at once whenever `status` reports a stop reason, says `references` is open, or a registry has refused a request.** A check-in says how many papers are in, undecided and out, quotes the latest shortfall reasons, says which of the pre-run risks the verdicts bear out, and ends with the choice — continue, steer or stop — and waits for the answer. Between check-ins, run the rounds without asking.
+**Check in with the user after round 1, then every 5 rounds, and at once whenever `status` reports a stop reason, says `references` or `citing` is open, or a registry has refused a request.** A check-in says how many papers are in, undecided and out, quotes the latest shortfall reasons, says which of the pre-run risks the verdicts bear out, and ends with the choice — continue, steer or stop — and waits for the answer. Between check-ins, run the rounds without asking.
 
 - `context` writes `rounds/NNN/context.md`. **Read it** — it carries the topic, the facets,
   the redlist of everything already seen, and the exact output format.
@@ -183,8 +183,8 @@ context  →  you write proposals.json  →  submit  →  judge  →  you write 
   not yours. **Search only to find papers you do not know**, such as recent work. **Give the
   DOI whenever you know it** — a right one is verified exactly — and `null` when you do not; a
   wrong DOI falls back to the title search, so it does not lose the paper. Mark
-  each paper's `source` — `"recall"`, `"search"` or `"references"`, with `found_via` for a
-  search or a paper from the `references` list. Write
+  each paper's `source` — `"recall"`, `"search"`, `"references"` or `"citing"`, with
+  `found_via` for a search or a paper from the `references` or `citing` list. Write
   `rounds/NNN/proposals.json`, with a top-level `model`
   naming your own model identifier — the corpus's methods section depends on it — and have
   the judge subagent do the same in `judging_response.json`. Never construct a DOI.
@@ -213,11 +213,32 @@ context  →  you write proposals.json  →  submit  →  judge  →  you write 
   earlier: the
   ranking needs enough papers you found yourself. If the user asks for it sooner, run it with
   `--now`.
-- **Follow the corpus's reference lists only through `references`.** Searching the web stays
-  allowed, including for papers that cite one you know. What is not allowed is harvesting
-  candidates from pages: never fetch a paper's reference list, or a citation service's pages
-  (such as Semantic Scholar), to mine candidates. The command lists the corpus's own reference
-  lists from OpenAlex, which the run already uses.
+- **When `status` or `submit` says `citing` is open**, the reference lists are running dry too.
+  Run it once and ask the user, with the counts it prints: *"The papers your corpus cites are
+  running out. PaperRaven can now list the works that cite your corpus and are not yet in it:
+  <the counts>. They are ranked by how much of their reference list is your corpus. How many
+  papers would you like to add from them? Or give a minimum number of your corpus papers each
+  must cite."* A number of papers becomes the run's target: set `budget.target_papers` in
+  `runs/<name>/config_draft.yaml` to the papers found so far plus that number, raise
+  `budget.max_rounds` if the run would reach it first (allow a round for every 4 papers or so),
+  and `steer` (neither change re-judges anything); the run stops at the target as usual. A minimum is
+  passed as `--min-cites` from then on. Then run it before writing each round's proposals:
+
+  ```bash
+  {{python}} -m paperraven --run-dir runs/<name> citing [--min-cites K]
+  ```
+
+  Read `rounds/NNN/citing_candidates.md` and propose the candidates within the criteria, with
+  `"source": "citing"` and `found_via` as the list gives it; decline the others as for
+  `references`, in the same `"declined_candidates"` list with a `"decline_reason"`. It searches
+  OpenAlex once and later rounds rank from that search with no calls; run it with `--refresh`
+  to search again, as when it says the search is used up. If the user asks for it sooner, run
+  it with `--now`.
+- **Follow the corpus's reference lists only through `references`, and the works that cite it
+  only through `citing`.** Searching the web stays allowed, including for papers that cite one
+  you know. What is not allowed is harvesting candidates from pages: never fetch a paper's
+  reference list, or a citation service's pages (such as Semantic Scholar), to mine candidates.
+  The commands list them from OpenAlex, which the run already uses.
   **Every fifth round, make one proposal a deliberate boundary probe** — a paper you expect
   the criteria to *exclude* — and say so in its `explanation`. A proposer that offers only
   what it expects to pass never tests the exclusion criteria.
@@ -399,6 +420,9 @@ prints its own estimate after the registry lookups, and a progress line every 10
 - **The destination** defaults to a `pdfs/` folder beside the `.bib`, which for an export is
   `<corpus>/pdfs/`. Tell the user where that is, and take another folder if they name one.
   - The command refuses a place git would track: PDFs are copyrighted.
+  - `export` has already copied the user's seed PDFs into `<corpus>/pdfs/` (its output says how
+    many), so `fetch` counts them as present and never asks the user for a seed. If `export`
+    says a seed file was not copied, tell the user which.
 - **The command prints its own advice** (campus network or VPN; library licences; Zotero). Pass
   it on.
 - **What it does:** it downloads what it can the way a reference manager does: open copies
@@ -432,4 +456,5 @@ prints its own estimate after the registry lookups, and a progress line every 10
 - Construct a DOI from a pattern. Give the DOI you remember, or `null`: a wrong one falls
   back to the title search, but a fabricated one is noise in the audit trail.
 - Harvest candidates from reference lists on web pages or from citation services' pages.
-  Searching the web stays allowed; the corpus's own reference lists come through `references`.
+  Searching the web stays allowed; the corpus's own reference lists come through `references`,
+  and the works that cite it through `citing`.

@@ -11,7 +11,8 @@ theses.
 It keeps the persona, brainstorming across eras, the null DOI when the model does not know it,
 no constructed DOIs, the REDLIST, the `papers` key, `model`, `shortfall_reason` and the boundary
 probe. It names the third `source`, `"references"`, for a paper taken from the `references`
-list, and the `declined_candidates` key for the list's candidates the model decides against.
+list, the fourth, `"citing"`, for one taken from the `citing` list, and the
+`declined_candidates` key for the candidates on either list the model decides against.
 
 This file contains no domain terms. Everything specific to a topic arrives through the
 placeholders.
@@ -68,13 +69,14 @@ description under TOPIC and INCLUSIONS.
   your best recollection when you would bet on it.
 - **Do not construct a DOI from a pattern.**
 - For each paper, set `source` to `"recall"` if you named it from your own knowledge, to
-  `"search"` if you would not have named it without a search this round, or to
-  `"references"` if you took it from this round's `references` list. For `"search"`, set
-  `found_via` to the query you ran and the page (URL) where the paper turned up; for
-  `"references"`, to the list's "cited by N corpus papers: <keys>".
-- If you used a `references` list this round, name the candidates on it you decided against,
-  by their OpenAlex IDs, in a top-level `declined_candidates` list, so they are not listed
-  again. Say why in one line in a top-level `"decline_reason"`. If the user asked you to
+  `"search"` if you would not have named it without a search this round, to `"references"` if
+  you took it from this round's `references` list, or to `"citing"` if you took it from this
+  round's `citing` list. For `"search"`, set `found_via` to the query you ran and the page (URL)
+  where the paper turned up; for `"references"`, to the list's "cited by N corpus papers:
+  <keys>"; for `"citing"`, to the list's "cites N corpus papers, N of its M references: <keys>".
+- If you used a `references` or `citing` list this round, name the candidates on it you decided
+  against, by their OpenAlex IDs, in a top-level `declined_candidates` list, so they are not
+  listed again. Say why in one line in a top-level `"decline_reason"`. If the user asked you to
   narrow what you propose, say so, and say whether that declines papers the criteria admit.
   Keep the same line while the reason holds; the export quotes it.
 - If a paper is potentially relevant and you can name it precisely, include it. Discovery
@@ -95,8 +97,8 @@ description under TOPIC and INCLUSIONS.
   section can say which model's recall produced the corpus) and, whenever you return fewer
   than {papers_per_round}, `shortfall_reason` (string). Each paper object has:
   `title` (string), `doi` (string or null), `explanation` (string), `source` (`"recall"`,
-  `"search"` or `"references"`), `found_via` (string, when `source` is `"search"` or
-  `"references"`), and where known `year`
+  `"search"`, `"references"` or `"citing"`), `found_via` (string, when `source` is `"search"`,
+  `"references"` or `"citing"`), and where known `year`
   (integer) and `authors` (**a list of strings**, one per author — not a single
   string){extraction_fields}.
 

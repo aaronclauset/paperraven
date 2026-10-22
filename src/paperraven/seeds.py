@@ -204,6 +204,14 @@ def load_seed_candidates(config: Config, base_dir: Path | None = None) -> list[S
     read once. A file found nowhere is returned as ``missing``, not as unreadable, and so is a
     `pdf_dir` that does not exist.
     """
+    paths, missing = seed_paths(config, base_dir)
+    return [extract_seed_signals(q, config.seeds.read_depth) for q in paths] + missing
+
+
+def seed_paths(config: Config, base_dir: Path | None = None
+               ) -> tuple[list[Path], list[SeedCandidate]]:
+    """The configured seed files that exist, each once, and the entries found nowhere, as
+    `load_seed_candidates` finds them; nothing is read."""
     base = base_dir or Path.cwd()
     pdf_dir = None
     paths: list[Path] = []
@@ -236,7 +244,7 @@ def load_seed_candidates(config: Config, base_dir: Path | None = None) -> list[S
         if key not in seen:
             seen.add(key)
             unique.append(q)
-    return [extract_seed_signals(q, config.seeds.read_depth) for q in unique] + missing
+    return unique, missing
 
 
 def _file_identity(path: Path) -> object:

@@ -214,6 +214,29 @@ class OpenAlexRegistry:
         data = self.session.get_json(f"{self.base_url}/works", params=params)
         return [work_from_json(w) for w in (data.get("results") or [])]
 
+    #: Fields a `cites:` listing needs: the work's identity, the line it is listed on, and its
+    #: reference list. Lighter than `SELECT_FIELDS`, since a page holds `CITING_PAGE_SIZE` works.
+    CITING_FIELDS = ("id,doi,title,display_name,publication_year,type,authorships,"
+                     "primary_location,referenced_works")
+    CITING_PAGE_SIZE = 200
+
+    def fetch_citing(self, cited: Sequence[str],
+                     cursor: str = "*") -> tuple[list[RegistryWork], str | None]:
+        """One page of the works citing any of `cited` (up to `BATCH_SIZE` OpenAlex work IDs),
+        and the cursor of the next page, `None` once a page comes back empty."""
+        cited = list(cited)
+        if len(cited) > self.BATCH_SIZE:
+            raise ValueError(f"fetch_citing: at most {self.BATCH_SIZE} works per call, "
+                             f"got {len(cited)}")
+        if not all(isinstance(w, str) and w[:1] == "W" and w[1:].isdigit() for w in cited):
+            raise ValueError("fetch_citing: OpenAlex work IDs only")
+        params = {"filter": "cites:" + "|".join(cited), "per-page": self.CITING_PAGE_SIZE,
+                  "cursor": cursor, "select": self.CITING_FIELDS}
+        data = self.session.get_json(f"{self.base_url}/works", params=params)
+        results = data.get("results") or []
+        nxt = (data.get("meta") or {}).get("next_cursor") if results else None
+        return [work_from_json(w) for w in results], nxt
+
     def search_by_title(self, title: str, limit: int = 5) -> list[RegistryWork]:
         """Title search returning **several** candidates.
 

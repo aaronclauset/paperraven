@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 #: How a paper came into the corpus, in legend order, with its colour (Okabe–Ito, which stays
 #: distinguishable with the common colour-vision deficiencies).
 FOUND = {"seed": "#E69F00", "recall": "#0072B2", "search": "#009E73",
-         "references": "#CC79A7", "not stated": "#8C8C8C"}
+         "references": "#CC79A7", "citing": "#D55E00", "not stated": "#8C8C8C"}
 
 
 #: The most papers the page draws. Every step of its layout compares every pair of papers, so

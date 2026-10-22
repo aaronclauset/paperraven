@@ -31,6 +31,8 @@ LARGE_FILE_BYTES = 1_000_000
 #: A folder holding this is `paperraven fetch`'s output (`fetch.run.MANIFEST`); its default
 #: destination is `pdfs/` inside the export folder.
 FETCH_MANIFEST = "fetch_manifest.json"
+#: The list of the user's seed PDFs `export` copies there for `fetch` (`fetch.run.SEEDS`).
+SEED_LIST = "seeds.json"
 
 _MARKUP = re.compile(r"<\s*/?\s*[A-Za-z][^<>]*>|&(?:lt|gt|amp|quot|apos|#\d+);")
 _FIELD = re.compile(r"^  (\w+) = \{(.*)\},?$")
@@ -80,12 +82,16 @@ def _output_folder(dest: Path) -> dict[str, Any]:
              else f"{name}: changed after export"
              for name, digest in manifest.items()
              if not (dest / name).is_file() or _sha(dest / name) != digest]
-    fetched = sorted({m.parent for m in dest.rglob(FETCH_MANIFEST) if m.parent != dest})
+    fetched = sorted({m.parent for name in (FETCH_MANIFEST, SEED_LIST)
+                      for m in dest.rglob(name) if m.parent != dest})
     warns, notes = [], []
     for folder in fetched:
         n = sum(1 for _ in _files(folder))
         notes.append(f"{_rel(folder, dest)}/: {n} files written by `paperraven fetch` "
-                     f"(PDFs and its click-list); not part of the export")
+                     f"(PDFs and its click-list); not part of the export"
+                     if (folder / FETCH_MANIFEST).is_file() else
+                     f"{_rel(folder, dest)}/: {n} files, your seed PDFs copied there for "
+                     f"`paperraven fetch`; not part of the export")
     for p in _files(dest):
         name = _rel(p, dest)
         if name in manifest or name in (MANIFEST, REPORT):

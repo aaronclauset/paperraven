@@ -5,8 +5,8 @@ title: "PaperRaven: a machine assistant for generating topic-bounded, verified s
 authors:
   - family-names: Clauset
     given-names: Aaron
-version: 0.1.0
-date-released: 2026-10-01
+version: 0.2.0
+date-released: 2026-10-22
 url: "https://github.com/aaronclauset/paperraven"
 repository-code: "https://github.com/aaronclauset/paperraven"
 license: BSD-3-Clause

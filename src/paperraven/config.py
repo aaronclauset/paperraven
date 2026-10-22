@@ -271,7 +271,7 @@ class Politeness(BaseModel):
     max_attempts: int = Field(default=4, ge=1)
     timeout_seconds: float = Field(default=30.0, gt=0.0)
     user_agent_product: str = "PaperRaven"
-    user_agent_version: str = "0.1.0"
+    user_agent_version: str = "0.2.0"
 
 
 class Matching(BaseModel):

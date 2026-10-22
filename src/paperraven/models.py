@@ -126,7 +126,7 @@ def type_in_scope(work_type: str | None) -> bool:
 
 #: How the proposer came to name a paper, self-reported: from its own knowledge, from a
 #: search it ran, or from the candidates the `references` command listed.
-ProposerSource = Literal["recall", "search", "references"]
+ProposerSource = Literal["recall", "search", "references", "citing"]
 PROPOSER_SOURCES: tuple[str, ...] = get_args(ProposerSource)
 
 
@@ -155,11 +155,11 @@ class PaperProposal(BaseModel):
 
     #: How the proposer came to name the paper, self-reported: `"recall"` from its own
     #: knowledge, `"search"` from a search it ran this round, `"references"` from the
-    #: `references` list, `None` when unstated or unrecognised. Disclosure only: NEVER
-    #: trusted downstream and no code may branch on it.
+    #: `references` list, `"citing"` from the `citing` list, `None` when unstated or
+    #: unrecognised. Disclosure only: NEVER trusted downstream and no code may branch on it.
     source: ProposerSource | None = None
     #: For `source == "search"`: the query and the page where the paper turned up; for
-    #: `"references"`, the corpus papers that cite it.
+    #: `"references"`, the corpus papers that cite it; for `"citing"`, the corpus papers it cites.
     found_via: str | None = None
 
     proposed_in_round: int
@@ -558,6 +558,7 @@ class RoundLog(BaseModel):
     from_recall: int | None = None
     from_search: int | None = None
     from_references: int | None = None
+    from_citing: int | None = None
     source_not_stated: int | None = None
     #: Each registry session's report for the command (auth, requests, a trip).
     registry: dict[str, Any] | None = None
