@@ -4,7 +4,7 @@
 
 A machine assistant for generating topic-bounded, verified samples of the scientific literature.
 
-**See how it works:** [a short walk-through of one real run](https://aaronclauset.github.io/paperraven/).
+**See how it works:** [a short walk-through of one real run](https://aaronclauset.github.io/paperraven/deck.html).
 
 **Input:** a few sentences or more describing your target topic, and a half-dozen or so example
 papers as seeds.
