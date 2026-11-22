@@ -460,10 +460,14 @@ def found_by_counts(proposals: Iterable[PaperProposal]) -> dict[str, int]:
 
 
 def _seed_files(config: Config) -> list[str]:
-    """The seed PDFs a config names, before `init` has resolved them (for `distill`)."""
+    """The seed files a config names, before `init` has resolved them (for `distill`)."""
+    from .seeds import _one_per_paper, is_seed_file
+
     names = [Path(f).name for f in config.seeds.files]
-    if config.seeds.pdf_dir and Path(config.seeds.pdf_dir).is_dir():
-        names += [p.name for p in Path(config.seeds.pdf_dir).glob("*.pdf")]
+    folder = Path(config.seeds.folder) if config.seeds.folder else None
+    if folder is not None and folder.is_dir():
+        names += [p.name for p in _one_per_paper(
+            sorted(q for q in folder.iterdir() if q.is_file() and is_seed_file(q)))]
     return [f"{n} (not yet resolved; `init` reads it)" for n in sorted(set(names))]
 
 

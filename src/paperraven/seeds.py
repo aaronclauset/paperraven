@@ -1,7 +1,10 @@
-"""Seed loading — PDFs on disk to verified records.
+"""Seed loading — files on disk to verified records.
 
-Seeds are **PDF files**, not DOIs, to avoid publisher paywalls. Resolved seeds enter the
-corpus and the redlist; a headless path seeds from DOIs (`init --seed-doi`).
+Seeds are **files**, not DOIs, to avoid publisher paywalls: a PDF, or text already extracted
+from one (Markdown, plain text, a saved HTML page; `SEED_SUFFIXES`). Text lets a pipeline
+that extracts PDFs upstream hand PaperRaven its output, so the PDF need not be the artifact a
+run is built on. Resolved seeds enter the corpus and the redlist; a headless path seeds from
+DOIs (`init --seed-doi`).
 
 ## Why three signals
 
@@ -14,10 +17,15 @@ of page 1 (boilerplate skipped, wrapped pairs joined) to the title-fallback casc
 tie-break in `verify.py` this resolves most seeds. What remains, typically a preprint
 whose title changed before publication, is the agent's, through the `seed` command.
 
+A text seed has the same three signals from different places: YAML front matter
+(`title:`, `doi:`) or HTML `citation_*` meta tags stand where `/Title` metadata does, and
+the front of the text, to the first page break, stands for page 1. A file without metadata
+is read exactly as page 1 of a PDF is.
+
 ## Division of labour
 
-Python extracts mechanically — page text, a DOI regex, PDF metadata, title *candidates*.
-Deciding which line is the title on a PDF where every candidate fails is judgement, and
+Python extracts mechanically — page text, a DOI regex, file metadata, title *candidates*.
+Deciding which line is the title on a file where every candidate fails is judgement, and
 belongs to the agent. :func:`write_seed_digest` hands over exactly those seeds, and
 `paperraven seed` is how the agent's answer gets back in.
 """
@@ -28,6 +36,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from html.parser import HTMLParser
 from typing import Iterable, Sequence
 
 from .config import Config
@@ -52,6 +61,18 @@ from .verify import KnownState, Verifier
 #: `) ; ] < >` are legal inside a DOI (SICI and ESA forms); `normalize_doi` trims what
 #: surrounding prose adds, by bracket balance.
 DOI_IN_TEXT = re.compile(r'10\.\d{4,9}/[^\s",]+')
+
+#: Seed files that are text already extracted from a paper. In preference order: when one
+#: paper arrives as several files of one name in one folder (``smith2020.md`` beside
+#: ``smith2020.pdf``), the first of these is read, since extracted text is cleaner than what
+#: `pypdf` recovers, and the PDF stays the paper's file for `export`.
+TEXT_SUFFIXES = (".md", ".markdown", ".html", ".htm", ".txt")
+#: Every seed file type a seed folder is searched for.
+SEED_SUFFIXES = (*TEXT_SUFFIXES, ".pdf")
+
+#: A text seed's "page 1" under `read_depth: front_matter`: up to its first form feed (a page
+#: break, as `pdftotext` writes them) and at most this many characters, about a page.
+FRONT_MATTER_CHARS = 5000
 
 #: Below this many characters, a `/Title` metadata value is more likely a filename stub or
 #: a template placeholder than a real title.
@@ -125,13 +146,14 @@ def looks_like_a_title(value: str | None) -> bool:
 
 @dataclass
 class SeedCandidate:
-    """What mechanical extraction could recover from one seed PDF."""
+    """What mechanical extraction could recover from one seed file."""
 
     path: Path
     doi: str | None = None
     title: str | None = None
     #: Page-1 text (or the whole document when `read_depth` is `full`), kept so the agent
-    #: can read it when neither signal was usable.
+    #: can read it when neither signal was usable. For a text seed, its front, to the first
+    #: page break.
     text: str = ""
     #: The third signal: title strings mined from the page text for the cascade to try.
     title_candidates: list[str] = field(default_factory=list)
@@ -150,14 +172,52 @@ class SeedCandidate:
         return self.path.stem
 
 
-def extract_seed_signals(path: str | Path, read_depth: str = "front_matter") -> SeedCandidate:
-    """Pull a DOI and a title out of one PDF, without judgement.
+def is_seed_file(path: Path) -> bool:
+    """Whether a file in a seed folder is a seed, by its suffix (any case)."""
+    return path.suffix.lower() in SEED_SUFFIXES
 
-    ``read_depth`` follows the user's choice: ``front_matter`` reads page 1 only,
-    which is much cheaper and where both signals live in practice; ``full`` reads
-    everything.
+
+def companion_pdf(path: Path) -> Path | None:
+    """The PDF of a seed: the file itself, or a PDF of the same name beside a text seed."""
+    if _is_pdf(path):
+        return path
+    for suffix in (".pdf", ".PDF"):
+        q = path.with_suffix(suffix)
+        if q.is_file():
+            return q
+    return None
+
+
+def _is_pdf(path: Path) -> bool:
+    """A PDF by suffix, or by content: a `.txt` that is really a PDF is read as one."""
+    if path.suffix.lower() == ".pdf":
+        return True
+    try:
+        with path.open("rb") as fh:
+            return fh.read(5) == b"%PDF-"
+    except OSError:
+        return False
+
+
+def extract_seed_signals(path: str | Path, read_depth: str = "front_matter") -> SeedCandidate:
+    """Pull a DOI and a title out of one seed file, without judgement.
+
+    ``read_depth`` follows the user's choice: ``front_matter`` reads page 1 only (for text,
+    up to its first page break, `FRONT_MATTER_CHARS` at most), which is much cheaper and
+    where both signals live in practice; ``full`` reads everything.
     """
     p = Path(path)
+    if _is_pdf(p):
+        return _extract_pdf(p, read_depth)
+    if p.suffix.lower() in TEXT_SUFFIXES:
+        return _extract_text(p, read_depth)
+    return SeedCandidate(path=p, error=(
+        f"not a seed file type: {p.suffix or 'no suffix'} (seeds are "
+        f"{', '.join(SEED_SUFFIXES)})"))
+
+
+def _extract_pdf(p: Path, read_depth: str) -> SeedCandidate:
+    """`extract_seed_signals` for a PDF: page text, `/Title` metadata, a DOI."""
     cand = SeedCandidate(path=p)
     try:
         import pypdf
@@ -195,42 +255,261 @@ def extract_seed_signals(path: str | Path, read_depth: str = "front_matter") -> 
     return cand
 
 
-def load_seed_candidates(config: Config, base_dir: Path | None = None) -> list[SeedCandidate]:
-    """Enumerate and extract every configured seed PDF, each once.
+def _extract_text(p: Path, read_depth: str) -> SeedCandidate:
+    """`extract_seed_signals` for text extracted from a paper: Markdown, plain text, HTML.
 
-    `files` are **extra** seeds, in addition to every PDF in
-    `pdf_dir`. A relative entry is looked for in `pdf_dir` first, then in `base_dir`; an
-    absolute one is used as given. A file named twice, or both listed and in `pdf_dir`, is
-    read once. A file found nowhere is returned as ``missing``, not as unreadable, and so is a
-    `pdf_dir` that does not exist.
+    Metadata (YAML front matter, or HTML meta tags) is used where the file has it, as
+    `/Title` metadata is on a PDF; the text itself is read as page 1 of a PDF is. Nothing is
+    trusted that a PDF's equivalent would not be: a metadata DOI still has to agree with the
+    file's own title lines (`_page_agrees`), and a metadata title still goes through the
+    fallback cascade.
+    """
+    cand = SeedCandidate(path=p)
+    try:
+        text = p.read_bytes().decode("utf-8-sig", errors="replace")   # BOM dropped
+    except OSError as exc:
+        cand.error = f"{type(exc).__name__}: {exc}"
+        return cand
+
+    suffix = p.suffix.lower()
+    if suffix in (".html", ".htm"):
+        meta, raw = _html_signals(text)
+        body, headings = raw, []
+    else:
+        meta, raw = _yaml_front_matter(text)
+        body, headings = _markdown_as_text(raw) if suffix in (".md", ".markdown") else (raw, [])
+
+    if read_depth != "full":
+        raw, body = _front(raw), _front(body)
+    cand.text = body
+
+    title = meta.get("title")
+    if looks_like_a_title(title):
+        cand.title = " ".join(title.split())
+    doi = normalize_doi(meta["doi"]) if meta.get("doi") else None
+    if doi is None:
+        # The raw text, not the cleaned body: Markdown link syntax is removed from the body,
+        # and a DOI is often only in a link's target.
+        m = DOI_IN_TEXT.search(raw)
+        doi = normalize_doi(m.group(0)) if m else None
+    cand.doi = doi
+
+    offered: list[str] = []
+    for t in [*meta.get("title_hints", []), *headings, *title_candidates_from_text(body)]:
+        t = " ".join(t.split())
+        lo, hi = _TITLE_WORDS
+        if t and t != cand.title and t not in offered and lo <= len(t.split()) <= hi + 5:
+            offered.append(t)
+    cand.title_candidates = offered[:_MAX_CANDIDATES]
+    return cand
+
+
+def _front(text: str) -> str:
+    """The front of a text seed: to its first page break, `FRONT_MATTER_CHARS` at most."""
+    text = text.lstrip("\f")
+    cut = text.find("\f")
+    return (text if cut < 0 else text[:cut])[:FRONT_MATTER_CHARS]
+
+
+#: A YAML front-matter block: ``---`` on the first line, closed by ``---`` or ``...``.
+_YAML_BLOCK = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)", re.S)
+
+
+def _yaml_front_matter(text: str) -> tuple[dict, str]:
+    """``title`` and ``doi`` from a YAML front-matter block (keys in any case), and the text
+    after it. A block that does not parse as a mapping is left in the text, as text."""
+    import yaml
+
+    m = _YAML_BLOCK.match(text)
+    if not m:
+        return {}, text
+    try:
+        data = yaml.safe_load(m.group(1))
+    except yaml.YAMLError:
+        return {}, text
+    if not isinstance(data, dict):
+        return {}, text
+    keys = {str(k).strip().lower(): v for k, v in data.items()}
+    meta: dict = {}
+    if isinstance(keys.get("title"), str):
+        meta["title"] = keys["title"]
+    if isinstance(keys.get("doi"), str):
+        meta["doi"] = keys["doi"]
+    return meta, text[m.end():]
+
+
+_MD_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.*?)(?:\s+#+)?\s*$")
+_MD_LINK = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+_MD_MARKUP = re.compile(r"\*\*|__|(?<!\w)[*_]|[*_](?!\w)|`|<[^>]+>")
+#: Lines that are layout, not text: rules and setext underlines, table rows, code fences.
+_MD_LAYOUT = re.compile(r"^\s*([-=*_]{3,}|\|.*|```.*|~~~.*)\s*$")
+#: A Markdown heading is offered as a title only near the top: after a few lines of text,
+#: a heading is a section ("1. Introduction"), not the paper's title.
+_HEADING_LINES = 8
+
+
+def _markdown_as_text(md: str) -> tuple[str, list[str]]:
+    """Markdown as the plain lines `title_candidates_from_text` reads, and the headings
+    near its top (a converter writes the title as one; they are offered first)."""
+    lines: list[str] = []
+    headings: list[str] = []
+    seen = 0
+    for line in md.splitlines():
+        if _MD_LAYOUT.match(line):
+            continue
+        heading = _MD_HEADING.match(line)
+        text = heading.group(1) if heading else line.lstrip().removeprefix(">").strip()
+        text = _MD_MARKUP.sub("", _MD_LINK.sub(r"\1", text)).strip()
+        if text:
+            seen += 1
+            if heading and seen <= _HEADING_LINES:
+                headings.append(text)
+        lines.append(text)
+    return "\n".join(lines), headings
+
+
+#: HTML meta tags (name or property, lower-cased) that carry a paper's title or DOI, as
+#: publishers and repositories write them for Google Scholar and Zotero.
+_HTML_TITLE_META = ("citation_title", "dc.title", "prism.title", "bepress_citation_title")
+_HTML_DOI_META = ("citation_doi", "prism.doi", "bepress_citation_doi", "dc.identifier",
+                  "dc.identifier.doi")
+#: Titles a page gives for display, not citation: offered as candidates, never trusted.
+_HTML_HINT_META = ("og:title", "twitter:title")
+_HTML_SKIP = {"script", "style", "noscript", "template", "svg"}
+_HTML_BLOCK = {"p", "div", "br", "li", "tr", "td", "th", "section", "article", "header",
+               "footer", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "dt", "dd",
+               "figcaption", "title", "main", "aside", "nav", "ul", "ol", "table"}
+#: Separators between a paper's title and the site's name in a page's ``<title>``.
+_SITE_SUFFIX = re.compile(r"\s+[|–—]\s+|\s+-\s+")
+
+
+class _HTMLSeedParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.meta: dict[str, str] = {}
+        self.parts: list[str] = []
+        self.title = ""
+        self.h1 = ""
+        self._h1_done = False
+        self._skip = 0
+        self._in: str | None = None
+
+    def handle_starttag(self, tag, attrs):
+        a = {k.lower(): (v or "") for k, v in attrs}
+        if tag == "meta":
+            key = (a.get("name") or a.get("property") or "").strip().lower()
+            if key and a.get("content") and key not in self.meta:
+                self.meta[key] = a["content"]
+            return
+        if tag in ("title", "h1") and self._in is None and not self._skip:
+            self._in = tag
+        if tag in _HTML_SKIP:
+            self._skip += 1
+        if tag in _HTML_BLOCK:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag == self._in:
+            self._in = None
+            self._h1_done = self._h1_done or (tag == "h1" and bool(self.h1.strip()))
+        if tag in _HTML_SKIP and self._skip:
+            self._skip -= 1
+        if tag in _HTML_BLOCK:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if self._in == "title":
+            self.title += data
+            return
+        if self._skip:
+            return
+        if self._in == "h1" and not self._h1_done:
+            self.h1 += data
+        self.parts.append(data)
+
+
+def _html_signals(html: str) -> tuple[dict, str]:
+    """A saved web page's citation metadata, and its visible text, one block per line."""
+    parser = _HTMLSeedParser()
+    try:
+        parser.feed(html)
+        parser.close()
+    except Exception:  # noqa: BLE001 - a malformed page still has whatever text was read
+        pass
+    tags = parser.meta
+    meta: dict = {}
+    title = next((tags[k] for k in _HTML_TITLE_META if tags.get(k)), None)
+    if title:
+        meta["title"] = title
+    for k in _HTML_DOI_META:
+        m = DOI_IN_TEXT.search(tags.get(k, ""))
+        if m:
+            meta["doi"] = m.group(0)
+            break
+    hints = [parser.h1, *(tags.get(k, "") for k in _HTML_HINT_META)]
+    page_title = " ".join(parser.title.split())
+    if page_title:
+        hints += [_SITE_SUFFIX.split(page_title)[0], page_title]
+    meta["title_hints"] = [h for h in hints if h.strip()]
+    text = "".join(parser.parts)
+    lines = [" ".join(line.split()) for line in text.splitlines()]
+    return meta, "\n".join(line for line in lines if line)
+
+
+def load_seed_candidates(config: Config, base_dir: Path | None = None) -> list[SeedCandidate]:
+    """Enumerate and extract every configured seed, each paper once.
+
+    `files` are **extra** seeds, in addition to every seed file in the seed folder (`dir`,
+    or its older name `pdf_dir`). A relative entry is looked for in the folder first, then
+    in `base_dir`; an absolute one is used as given. A file named twice, or both listed and
+    in the folder, is read once. A file found nowhere is returned as ``missing``, not as
+    unreadable, and so is a folder that does not exist.
+
+    A text seed with a PDF of the same name beside it is read from the text; if the text
+    yields no signal at all (an empty or failed extraction), the PDF is read instead.
     """
     paths, missing = seed_paths(config, base_dir)
-    return [extract_seed_signals(q, config.seeds.read_depth) for q in paths] + missing
+    out = []
+    for q in paths:
+        cand = extract_seed_signals(q, config.seeds.read_depth)
+        pdf = companion_pdf(q)
+        if (pdf is not None and pdf != q
+                and not (cand.doi or cand.title or cand.title_candidates)):
+            from_pdf = extract_seed_signals(pdf, config.seeds.read_depth)
+            if not from_pdf.error:
+                cand = from_pdf
+        out.append(cand)
+    return out + missing
 
 
 def seed_paths(config: Config, base_dir: Path | None = None
                ) -> tuple[list[Path], list[SeedCandidate]]:
-    """The configured seed files that exist, each once, and the entries found nowhere, as
-    `load_seed_candidates` finds them; nothing is read."""
+    """The configured seed files that exist, one per paper, and the entries found nowhere,
+    as `load_seed_candidates` finds them; nothing is read.
+
+    One per paper: files of one name in one folder (``smith2020.md``, ``smith2020.pdf``) are
+    one paper, read from the first in `TEXT_SUFFIXES` order; the PDF is found again by
+    `companion_pdf`.
+    """
     base = base_dir or Path.cwd()
-    pdf_dir = None
+    folder = None
     paths: list[Path] = []
     missing: list[SeedCandidate] = []
-    if config.seeds.pdf_dir:
-        pdf_dir = Path(config.seeds.pdf_dir)
-        if not pdf_dir.is_absolute():
-            pdf_dir = base / pdf_dir
-        if pdf_dir.is_dir():
-            paths.extend(sorted(pdf_dir.glob("*.pdf")))
+    if config.seeds.folder:
+        folder = Path(config.seeds.folder)
+        if not folder.is_absolute():
+            folder = base / folder
+        if folder.is_dir():
+            paths.extend(sorted(q for q in folder.iterdir() if q.is_file() and is_seed_file(q)))
         else:
-            missing.append(SeedCandidate(path=pdf_dir, missing=True,
-                                         entry=str(config.seeds.pdf_dir),
-                                         looked_in=[str(pdf_dir.parent)]))
+            missing.append(SeedCandidate(path=folder, missing=True,
+                                         entry=str(config.seeds.folder),
+                                         looked_in=[str(folder.parent)]))
     for f in config.seeds.files:
         if any(m.entry == str(f) for m in missing):
             continue
         p = Path(f)
-        tries = [p] if p.is_absolute() else [*([pdf_dir / p] if pdf_dir else []), base / p]
+        tries = [p] if p.is_absolute() else [*([folder / p] if folder else []), base / p]
         found = next((t for t in tries if t.is_file()), None)
         if found is None:
             missing.append(SeedCandidate(path=tries[-1], missing=True, entry=str(f),
@@ -244,7 +523,26 @@ def seed_paths(config: Config, base_dir: Path | None = None
         if key not in seen:
             seen.add(key)
             unique.append(q)
-    return unique, missing
+    return _one_per_paper(unique), missing
+
+
+def _one_per_paper(paths: list[Path]) -> list[Path]:
+    """Of files sharing a folder and a name, the one to read (`TEXT_SUFFIXES` order, then
+    the PDF), in the order the first of them was found."""
+    def rank(q: Path) -> int:
+        s = q.suffix.lower()
+        return SEED_SUFFIXES.index(s) if s in SEED_SUFFIXES else len(SEED_SUFFIXES)
+
+    best: dict[tuple[object, str], Path] = {}
+    order: list[tuple[object, str]] = []
+    for q in paths:
+        key = (_file_identity(q.parent), q.stem)
+        if key not in best:
+            order.append(key)
+            best[key] = q
+        elif rank(q) < rank(best[key]):
+            best[key] = q
+    return [best[k] for k in order]
 
 
 def _file_identity(path: Path) -> object:
@@ -331,7 +629,7 @@ def seed_corpus(
             continue
 
         # --- DOI extracted from the paper's own front matter: trust it. --------------
-        # A seed is NOT an untrusted model claim. The user handed us the PDF and the DOI
+        # A seed is NOT an untrusted model claim. The user handed us the file and the DOI
         # came off its own first page, so there is no hallucination to guard against and
         # nothing to corroborate a title against. Routing seeds through the proposal
         # cascade would compare the registry's title against `/Title` metadata that is
@@ -506,9 +804,9 @@ def seed_from_dois(
 ) -> SeedResult:
     """Seed directly from DOIs — the **headless** path.
 
-    A re-run from a known list of DOIs runs without a human, so it cannot use the PDF
+    A re-run from a known list of DOIs runs without a human, so it cannot use the seed-file
     path. Kept separate rather than folded in, because the
-    production path is deliberately PDF-based and this one must not become the default.
+    production path is deliberately file-based and this one must not become the default.
     """
     result = SeedResult()
     for raw in dois:
@@ -557,12 +855,13 @@ def write_seed_digest(candidates: Sequence[SeedCandidate], path: str | Path,
         "# Seed papers needing a title",
         "",
         "Mechanical extraction could not resolve these files: no usable DOI, and no title "
-        "candidate from page 1 matched a registry record. Read the text below, identify "
+        "candidate from page 1 (or the front of a text file) matched a registry record. "
+        "Read the text below, identify "
         "each paper's title (and DOI, if you can find one), then for each run:",
         "",
         f'    {python_command()} -m paperraven --run-dir <run> seed --file <name> --title "<title>" [--doi <doi>]',
         "",
-        "**If the PDF is a preprint, the title on its face may not be the published "
+        "**If the paper is a preprint, the title on its face may not be the published "
         "one.** arXiv and similar versions are frequently retitled before publication -- "
         "a dropped or added word is enough to make a registry title search return "
         "nothing. If the title as printed does not resolve, look the paper up and try the "
