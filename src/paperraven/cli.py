@@ -728,6 +728,10 @@ def seed_pdf_lines(seed: dict) -> list[str]:
         lines.append(f"seed files not copied (no paper of the corpus, or a second file for "
                      f"one): "
                      f"{', '.join(seed['unplaced'])}")
+    if seed.get("text_only"):
+        lines.append(f"seeds given as text, with no PDF of the same name beside them, so "
+                     f"`fetch` will look for their PDFs as for any paper's: "
+                     f"{', '.join(seed['text_only'])}")
     return lines
 
 
@@ -1016,7 +1020,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("init", help="resolve seeds and write round 1's context")
     p.add_argument("--seed-doi", action="append",
                    help="headless seeding from a DOI (repeatable). Ordinary seeding "
-                        "uses PDFs on disk; this is for re-runs from a known list")
+                        "uses seed files on disk (PDF, Markdown, text, HTML); this is for "
+                        "re-runs from a known list")
     p.add_argument("--base-dir", help="root for relative seed paths (default: cwd)")
     p.add_argument("--show-topic", action="store_true",
                    help="print every facet's keywords, not just their counts")
@@ -1109,10 +1114,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "record too (by default nothing else is re-judged)")
     p.set_defaults(func=cmd_steer)
 
-    p = sub.add_parser("seed", help="resolve a seed PDF the mechanical cascade could not, "
+    p = sub.add_parser("seed", help="resolve a seed file the mechanical cascade could not, "
                                     "from the title (and DOI) the agent read off it")
-    p.add_argument("--file", required=True, help="the seed PDF named in seed_digest.md")
-    p.add_argument("--title", required=True, help="the paper's title as read from the PDF")
+    p.add_argument("--file", required=True, help="the seed file named in seed_digest.md")
+    p.add_argument("--title", required=True, help="the paper's title as read from the file")
     p.add_argument("--doi", help="the paper's DOI, if the agent found one")
     p.set_defaults(func=cmd_seed)
 

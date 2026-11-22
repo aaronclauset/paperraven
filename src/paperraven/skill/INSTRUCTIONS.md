@@ -180,7 +180,8 @@ Skip the interview entirely. Go straight to `init`.
 {{python}} -m paperraven --run-dir runs/<name> --config <path> init
 ```
 
-This resolves the seed PDFs, files them, and writes round 1's context. It **refuses** to
+This resolves the seed files (PDFs, or text extracted from them: `.md`, `.txt`, `.html`),
+files them, and writes round 1's context. It **refuses** to
 re-initialise a run that already has rounds.
 
 Two things to notice in the output:
@@ -189,12 +190,13 @@ Two things to notice in the output:
   The user asserted these are relevant, which is stronger evidence than any judge's
   opinion, so they are *not* sent for judging.
 - **If it says `ACTION: read <path>/seed_digest.md`**, some seeds could not be resolved
-  mechanically: no usable DOI on page 1, and no title candidate from the page text matched
+  mechanically: no usable DOI on page 1 (for a text seed, its front matter or the start of
+  its text), and no title candidate from the page text matched
   a registry record. Open the file, read each seed's extracted text, identify the paper's
   title — and its DOI if you can find one — and finish the seeding yourself:
 
   ```bash
-  {{python}} -m paperraven --run-dir runs/<name> seed --file <name>.pdf --title "<title>" [--doi <doi>]
+  {{python}} -m paperraven --run-dir runs/<name> seed --file <file name> --title "<title>" [--doi <doi>]
   ```
 
   One call per seed. The paper is verified the same way every seed is, admitted to the
@@ -707,7 +709,8 @@ It works the way a reference manager does:
 - `export` copies the user's seed PDFs into `<corpus>/pdfs/` and lists them in
   `pdfs/seeds.json`; `fetch` takes each listed file as its paper's while it is unchanged, so a
   seed never goes on the click-list, even one whose first page cannot be read. If `export` says
-  a seed file was not copied, tell the user which.
+  a seed file was not copied, tell the user which. A seed given only as text, with no PDF of the
+  same name beside it, is not copied; `fetch` looks for its PDF like any other paper's.
 - It reports how many of the PDFs in the folder are preprints (submitted or accepted versions),
   whichever run fetched them, and lists their published versions as optional on the click-list.
 - It leaves a `click_list.html` of what it could not get. The user downloads those the usual

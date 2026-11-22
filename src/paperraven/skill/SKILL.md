@@ -73,8 +73,9 @@ provenance; do not tell the user they are. Two consequences:
 
 ## 1. Interview (skip if the user hands you a config)
 
-Ask for: a topic description (prose or a file), **seed PDFs on disk** (5–10; files, not
-DOIs), read depth (front matter is the default), **a target paper count —
+Ask for: a topic description (prose or a file), **seed papers on disk** (5–10; files, not
+DOIs: PDFs, or text already extracted from them as `.md`, `.txt` or `.html`, one paper per
+file; the folder goes in the config as `seeds.dir`), read depth (front matter is the default), **a target paper count —
 how many papers the tool should find (seeds do not count)**, which goes in the config as
 `budget.target_papers`, and a contact email for the registries' polite pool, which goes in the
 config as `contact_email:` (an environment variable set in one of your shell commands does not
@@ -102,7 +103,7 @@ exclusion the seeds would fail has to be settled before it runs, not discovered 
 with no data: in or out?"* — not as an abstract boundary. One named paper gets a decision
 in one turn.
 
-Read the seed PDFs yourself. Distil the topic into a config: **2–4 facets** (named keyword
+Read the seed papers yourself. Distil the topic into a config: **2–4 facets** (named keyword
 groups — a taxon, a measurement, a method, a setting — 5–25 terms each, synonyms and older
 vocabulary included), exclusion facets, inclusion/exclusion prose. Render the prompt that
 tells you how, if you want it:
@@ -163,7 +164,7 @@ identify its title (and DOI if you can), and finish the seeding — one call per
 **before** `context`:
 
 ```bash
-{{python}} -m paperraven --run-dir runs/<name> seed --file <name>.pdf --title "<title>" [--doi <doi>]
+{{python}} -m paperraven --run-dir runs/<name> seed --file <file name> --title "<title>" [--doi <doi>]
 ```
 
 ## 3. The round loop
@@ -422,7 +423,9 @@ prints its own estimate after the registry lookups, and a progress line every 10
   - The command refuses a place git would track: PDFs are copyrighted.
   - `export` has already copied the user's seed PDFs into `<corpus>/pdfs/` (its output says how
     many), so `fetch` counts them as present and never asks the user for a seed. If `export`
-    says a seed file was not copied, tell the user which.
+    says a seed file was not copied, tell the user which. A seed given only as text (no PDF of
+    the same name beside it) is not copied, and `fetch` looks for its PDF as for any paper's;
+    `export` names those seeds.
 - **The command prints its own advice** (campus network or VPN; library licences; Zotero). Pass
   it on.
 - **What it does:** it downloads what it can the way a reference manager does: open copies

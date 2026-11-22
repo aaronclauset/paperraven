@@ -2,6 +2,17 @@
 
 All notable changes to PaperRaven are listed here, newest first.
 
+## Unreleased
+
+**Added**
+- Seeds need not be PDFs: a seed can also be text already extracted from a paper — Markdown,
+  plain text, or a saved HTML page — so a pipeline that extracts PDFs upstream can hand its
+  output to PaperRaven. YAML front matter (`title`, `doi`) and HTML `citation_*` meta tags are
+  read when present. A text file and a PDF of the same name are one seed; `export` copies the
+  PDF, and a text-only seed is left for `fetch`.
+- `seeds.dir`, the seed folder for every seed file type. `seeds.pdf_dir` is still read, and a
+  config that uses it keeps its fingerprint, so existing runs are unaffected.
+
 ## 0.2.0
 
 **Added**

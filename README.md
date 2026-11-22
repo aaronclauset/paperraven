@@ -63,7 +63,7 @@ Start Claude Code in that folder and type:
 /paperraven
 ```
 
-PaperRaven interviews you — topic, a half-dozen or so seed PDFs on disk, how many papers you
+PaperRaven interviews you — topic, a half-dozen or so seed papers on disk, how many papers you
 want, a contact email — shows you the criteria it drafted from your words and argues against
 them before you approve, and then runs the loop, checking in with you after the first round and
 every five rounds after that. You decide when to stop, whether to mine the corpus's reference
@@ -124,8 +124,8 @@ The commands, in the order a run uses them (`paperraven --help` lists them):
 ```
 install-skill once   put the skill and its two agents in this project's .claude/
 check     first     the OpenAlex key and the contact email; no network call
-init      once      resolve seed PDFs, write round 1's context
-seed      as needed resolve a seed PDF the automatic pass could not
+init      once      resolve seed files, write round 1's context
+seed      as needed resolve a seed file the automatic pass could not
 context   per round render the prompt the LLM answers     -> context.md
 submit    per round verify the LLM's proposals            <- proposals.json
 judge     per round emit the judging worklist             -> judging_request.json
@@ -271,6 +271,16 @@ criteria. You get a bounded corpus with reasons, not a ranked list.
 **How many papers can I ask for?** You set the target. Test runs have returned 88 to 207 papers.
 A narrow topic runs dry sooner, and PaperRaven says when it does. See Usage for what a run
 costs your plan.
+
+**Do my seed papers have to be PDFs?** No. A seed can also be text already extracted from a
+paper: Markdown (`.md`), plain text (`.txt`) or a saved web page (`.html`), one paper per file,
+so a pipeline that extracts your PDFs can hand PaperRaven its output. Put them in the seed
+folder (`seeds.dir` in the config; `pdf_dir`, its older name, still works). A `title:` and
+`doi:` in YAML front matter, or a page's `citation_title` and `citation_doi` tags, are used when
+present, and otherwise the start of the text is read as a PDF's first page is. A text file and a
+PDF of the same name (`smith2020.md`, `smith2020.pdf`) are one seed: PaperRaven reads the text,
+and `export` copies the PDF for `fetch`. A seed with no PDF beside it is fetched like any other
+paper.
 
 **Can it get paywalled PDFs?** Only what you already have access to: on a campus network or
 VPN, `fetch` gets what your browser would. It bypasses no paywall. Everything else goes on a

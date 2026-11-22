@@ -20,7 +20,7 @@ from pydantic import (BaseModel, ConfigDict, Field, field_validator, model_seria
 #: point of the polite pool — but it is PII, and configs get shared and committed.
 CONTACT_EMAIL_ENV = "PAPERRAVEN_CONTACT_EMAIL"
 
-#: Read depth for seed PDFs. The agent **asks** rather than deciding silently, because
+#: Read depth for seed files. The agent **asks** rather than deciding silently, because
 #: full-text reading is expensive and the cost is the user's to accept.
 READ_DEPTH_CHOICES = ("front_matter", "full")
 
@@ -200,16 +200,23 @@ class Judging(BaseModel):
 
 
 class Seeds(BaseModel):
-    """Seed papers are **PDF files on disk**, not DOIs — DOIs would mean fetching, which
+    """Seed papers are **files on disk**, not DOIs — DOIs would mean fetching, which
     means publisher paywalls.
 
-    Every PDF in `pdf_dir`, plus each of `files` (extra seeds). A relative
-    `files` entry is looked for in `pdf_dir` first, then in the directory `init` runs from;
-    each PDF is read once.
+    A seed is a PDF, or text already extracted from one (`SEED_SUFFIXES`: Markdown, plain
+    text, saved HTML), so a pipeline that extracts PDFs upstream can hand PaperRaven its
+    output. Every such file in `dir`, plus each of `files` (extra seeds). A relative `files`
+    entry is looked for in `dir` first, then in the directory `init` runs from; each paper is
+    read once (a text file and a PDF of the same name beside it are one seed).
+
+    `pdf_dir` is the older name for `dir` and is still read. Only the name that was set is
+    written back, so a config written before `dir` existed serializes, and is fingerprinted,
+    exactly as it was.
     """
 
     model_config = ConfigDict(extra="forbid")
 
+    dir: str | None = None
     pdf_dir: str | None = None
     files: list[str] = Field(default_factory=list)
     read_depth: str = "front_matter"
@@ -220,6 +227,30 @@ class Seeds(BaseModel):
         if v not in READ_DEPTH_CHOICES:
             raise ValueError(f"read_depth must be one of {READ_DEPTH_CHOICES}, got {v!r}")
         return v
+
+    @model_validator(mode="after")
+    def _one_folder(self) -> "Seeds":
+        if self.dir and self.pdf_dir and self.dir != self.pdf_dir:
+            raise ValueError(
+                f"seeds.dir ({self.dir!r}) and seeds.pdf_dir ({self.pdf_dir!r}) name two "
+                f"folders; `pdf_dir` is the older name for `dir`, so set only `dir`")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _omit_unused_folder_key(self, handler: Any) -> dict[str, Any]:
+        # `dir` is left out when unset, so every config written before it existed keeps its
+        # digest; `pdf_dir` is left out when `dir` carries the folder.
+        data = handler(self)
+        if data.get("dir") is None:
+            data.pop("dir", None)
+        elif data.get("pdf_dir") is None:
+            data.pop("pdf_dir", None)
+        return data
+
+    @property
+    def folder(self) -> str | None:
+        """The seed folder, under whichever name the config gave it."""
+        return self.dir or self.pdf_dir
 
 
 class Budget(BaseModel):

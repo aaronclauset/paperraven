@@ -1063,6 +1063,10 @@ def _seed_pdfs(corpus: "Corpus", config: "Config", dest: Path,
     """Copy the user's seed PDFs into `pdfs/`, `fetch`'s default folder, listed in its `SEEDS`
     file, so `fetch` takes each as its paper's and never puts a seed on the click-list.
 
+    A seed given as text is its PDF's only if a PDF of the same name is beside it
+    (`companion_pdf`); that PDF is the one copied. A text seed with no PDF is not copied
+    (`text_only`): text is not the paper's PDF, so `fetch` looks for it as for any paper.
+
     Which file is which seed: the `seed` command's record, for a seed the agent resolved by hand
     (its page 1 could not be read, so `fetch` could never identify it); else `fetch`'s page-1
     identification against the seeds alone, without the strict rule for folders of unrelated
@@ -1072,11 +1076,11 @@ def _seed_pdfs(corpus: "Corpus", config: "Config", dest: Path,
     """
     from .fetch.identify import IDENTIFIED, Target, identify, sha256
     from .fetch.run import SEEDS, FetchRefused, refuse_if_tracked
-    from .seeds import seed_paths
+    from .seeds import companion_pdf, seed_paths
     from .worklist import assign_filenames
 
     out: dict[str, Any] = {"copied": 0, "listed": 0, "unplaced": [], "name_taken": [],
-                           "refused": None}
+                           "text_only": [], "refused": None}
     seeds = {d: r for d, r in corpus.greenlist.items()
              if r.provenance.discovered_by is DiscoveredBy.SEED}
     by_command = {Path(e.arguments.get("file", "")).stem: e.result.get("doi")
@@ -1085,8 +1089,12 @@ def _seed_pdfs(corpus: "Corpus", config: "Config", dest: Path,
     targets = [Target(d, doi=d if r.has_doi else None, title=r.title, year=r.year)
                for d, r in seeds.items()]
     placed: dict[str, tuple[Path, str]] = {}
-    for path in seed_paths(config, base_dir)[0] if seeds else []:
-        doi, how = by_command.get(path.stem), "seed command"
+    for seed_file in seed_paths(config, base_dir)[0] if seeds else []:
+        path = companion_pdf(seed_file)
+        if path is None:
+            out["text_only"].append(seed_file.name)
+            continue
+        doi, how = by_command.get(seed_file.stem), "seed command"
         if doi not in seeds:
             found = identify(path, targets)
             doi, how = (found.identifier, "page 1") if found.status == IDENTIFIED else (None, "")
